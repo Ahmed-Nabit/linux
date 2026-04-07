@@ -34,7 +34,7 @@
  * the same driver for allocation, read and write operations.
  *
  * Open-coding access to :c:type:`struct iosys_map <iosys_map>` is considered
- * bad style. Rather then accessing its fields directly, use one of the provided
+ * bad style. Rather than accessing its fields directly, use one of the provided
  * helper functions, or implement your own. For example, instances of
  * :c:type:`struct iosys_map <iosys_map>` can be initialized statically with
  * IOSYS_MAP_INIT_VADDR(), or at runtime with iosys_map_set_vaddr(). These
@@ -46,9 +46,12 @@
  *
  *	iosys_map_set_vaddr(&map, 0xdeadbeaf);
  *
- * To set an address in I/O memory, use iosys_map_set_vaddr_iomem().
+ * To set an address in I/O memory, use IOSYS_MAP_INIT_VADDR_IOMEM() or
+ * iosys_map_set_vaddr_iomem().
  *
  * .. code-block:: c
+ *
+ *	struct iosys_map map = IOSYS_MAP_INIT_VADDR_IOMEM(0xdeadbeaf);
  *
  *	iosys_map_set_vaddr_iomem(&map, 0xdeadbeaf);
  *
@@ -122,6 +125,16 @@ struct iosys_map {
 	}
 
 /**
+ * IOSYS_MAP_INIT_VADDR_IOMEM - Initializes struct iosys_map to an address in I/O memory
+ * @vaddr_iomem_:	An I/O-memory address
+ */
+#define IOSYS_MAP_INIT_VADDR_IOMEM(vaddr_iomem_)	\
+	{						\
+		.vaddr_iomem = (vaddr_iomem_),		\
+		.is_iomem = true,			\
+	}
+
+/**
  * IOSYS_MAP_INIT_OFFSET - Initializes struct iosys_map from another iosys_map
  * @map_:	The dma-buf mapping structure to copy from
  * @offset_:	Offset to add to the other mapping
@@ -155,9 +168,9 @@ struct iosys_map {
  * about the use of uninitialized variable.
  */
 #define IOSYS_MAP_INIT_OFFSET(map_, offset_) ({				\
-	struct iosys_map copy = *map_;					\
-	iosys_map_incr(&copy, offset_);					\
-	copy;								\
+	struct iosys_map copy_ = *map_;					\
+	iosys_map_incr(&copy_, offset_);				\
+	copy_;								\
 })
 
 /**
@@ -251,12 +264,7 @@ static inline bool iosys_map_is_set(const struct iosys_map *map)
  */
 static inline void iosys_map_clear(struct iosys_map *map)
 {
-	if (map->is_iomem) {
-		map->vaddr_iomem = NULL;
-		map->is_iomem = false;
-	} else {
-		map->vaddr = NULL;
-	}
+	memset(map, 0, sizeof(*map));
 }
 
 /**
@@ -378,14 +386,14 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * Returns:
  * The value read from the mapping.
  */
-#define iosys_map_rd(map__, offset__, type__) ({				\
-	type__ val;								\
-	if ((map__)->is_iomem) {						\
-		__iosys_map_rd_io(val, (map__)->vaddr_iomem + (offset__), type__);\
-	} else {								\
-		__iosys_map_rd_sys(val, (map__)->vaddr + (offset__), type__);	\
-	}									\
-	val;									\
+#define iosys_map_rd(map__, offset__, type__) ({					\
+	type__ val_;									\
+	if ((map__)->is_iomem) {							\
+		__iosys_map_rd_io(val_, (map__)->vaddr_iomem + (offset__), type__);	\
+	} else {									\
+		__iosys_map_rd_sys(val_, (map__)->vaddr + (offset__), type__);		\
+	}										\
+	val_;										\
 })
 
 /**
@@ -400,20 +408,20 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * or if pointer may be unaligned (and problematic for the architecture
  * supported), use iosys_map_memcpy_to()
  */
-#define iosys_map_wr(map__, offset__, type__, val__) ({				\
-	type__ val = (val__);							\
-	if ((map__)->is_iomem) {						\
-		__iosys_map_wr_io(val, (map__)->vaddr_iomem + (offset__), type__);\
-	} else {								\
-		__iosys_map_wr_sys(val, (map__)->vaddr + (offset__), type__);	\
-	}									\
+#define iosys_map_wr(map__, offset__, type__, val__) ({					\
+	type__ val_ = (val__);								\
+	if ((map__)->is_iomem) {							\
+		__iosys_map_wr_io(val_, (map__)->vaddr_iomem + (offset__), type__);	\
+	} else {									\
+		__iosys_map_wr_sys(val_, (map__)->vaddr + (offset__), type__);		\
+	}										\
 })
 
 /**
  * iosys_map_rd_field - Read a member from a struct in the iosys_map
  *
  * @map__:		The iosys_map structure
- * @struct_offset__:	Offset from the beggining of the map, where the struct
+ * @struct_offset__:	Offset from the beginning of the map, where the struct
  *			is located
  * @struct_type__:	The struct describing the layout of the mapping
  * @field__:		Member of the struct to read
@@ -472,16 +480,16 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * The value read from the mapping.
  */
 #define iosys_map_rd_field(map__, struct_offset__, struct_type__, field__) ({	\
-	struct_type__ *s;							\
+	struct_type__ *s_;							\
 	iosys_map_rd(map__, struct_offset__ + offsetof(struct_type__, field__),	\
-		     typeof(s->field__));					\
+		     typeof(s_->field__));					\
 })
 
 /**
  * iosys_map_wr_field - Write to a member of a struct in the iosys_map
  *
  * @map__:		The iosys_map structure
- * @struct_offset__:	Offset from the beggining of the map, where the struct
+ * @struct_offset__:	Offset from the beginning of the map, where the struct
  *			is located
  * @struct_type__:	The struct describing the layout of the mapping
  * @field__:		Member of the struct to read
@@ -495,9 +503,9 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * usage and memory layout.
  */
 #define iosys_map_wr_field(map__, struct_offset__, struct_type__, field__, val__) ({	\
-	struct_type__ *s;								\
+	struct_type__ *s_;								\
 	iosys_map_wr(map__, struct_offset__ + offsetof(struct_type__, field__),		\
-		     typeof(s->field__), val__);					\
+		     typeof(s_->field__), val__);					\
 })
 
 #endif /* __IOSYS_MAP_H__ */

@@ -25,6 +25,22 @@ unsigned int xprt_bc_max_slots(struct rpc_xprt *xprt)
 }
 
 /*
+ * Helper function to nullify backchannel server pointer in transport.
+ * We need to synchronize setting the pointer to NULL (done so after
+ * the backchannel server is shutdown) with the usage of that pointer
+ * by the backchannel request processing routines
+ * xprt_complete_bc_request() and rpcrdma_bc_receive_call().
+ */
+void xprt_svc_destroy_nullify_bc(struct rpc_xprt *xprt, struct svc_serv **serv)
+{
+	spin_lock(&xprt->bc_pa_lock);
+	svc_destroy(serv);
+	xprt->bc_serv = NULL;
+	spin_unlock(&xprt->bc_pa_lock);
+}
+EXPORT_SYMBOL_GPL(xprt_svc_destroy_nullify_bc);
+
+/*
  * Helper routines that track the number of preallocation elements
  * on the transport.
  */
@@ -78,12 +94,11 @@ static struct rpc_rqst *xprt_alloc_bc_req(struct rpc_xprt *xprt)
 	struct rpc_rqst *req;
 
 	/* Pre-allocate one backchannel rpc_rqst */
-	req = kzalloc(sizeof(*req), gfp_flags);
+	req = kzalloc_obj(*req, gfp_flags);
 	if (req == NULL)
 		return NULL;
 
 	req->rq_xprt = xprt;
-	INIT_LIST_HEAD(&req->rq_bc_list);
 
 	/* Preallocate one XDR receive buffer */
 	if (xprt_alloc_xdr_buf(&req->rq_rcv_buf, gfp_flags) < 0) {
@@ -132,7 +147,7 @@ EXPORT_SYMBOL_GPL(xprt_setup_backchannel);
 int xprt_setup_bc(struct rpc_xprt *xprt, unsigned int min_reqs)
 {
 	struct rpc_rqst *req;
-	struct list_head tmp_list;
+	LIST_HEAD(tmp_list);
 	int i;
 
 	dprintk("RPC:       setup backchannel transport\n");
@@ -148,7 +163,6 @@ int xprt_setup_bc(struct rpc_xprt *xprt, unsigned int min_reqs)
 	 * lock is held on the rpc_xprt struct.  It also makes cleanup
 	 * easier in case of memory allocation errors.
 	 */
-	INIT_LIST_HEAD(&tmp_list);
 	for (i = 0; i < min_reqs; i++) {
 		/* Pre-allocate one backchannel rpc_rqst */
 		req = xprt_alloc_bc_req(xprt);
@@ -349,15 +363,12 @@ found:
 }
 
 /*
- * Add callback request to callback list.  The callback
- * service sleeps on the sv_cb_waitq waiting for new
- * requests.  Wake it up after adding enqueing the
- * request.
+ * Add callback request to callback list.  Wake a thread
+ * on the first pool (usually the only pool) to handle it.
  */
 void xprt_complete_bc_request(struct rpc_rqst *req, uint32_t copied)
 {
 	struct rpc_xprt *xprt = req->rq_xprt;
-	struct svc_serv *bc_serv = xprt->bc_serv;
 
 	spin_lock(&xprt->bc_pa_lock);
 	list_del(&req->rq_bc_pa_list);
@@ -368,9 +379,21 @@ void xprt_complete_bc_request(struct rpc_rqst *req, uint32_t copied)
 	set_bit(RPC_BC_PA_IN_USE, &req->rq_bc_pa_state);
 
 	dprintk("RPC:       add callback request to list\n");
-	xprt_get(xprt);
-	spin_lock(&bc_serv->sv_cb_lock);
-	list_add(&req->rq_bc_list, &bc_serv->sv_cb_list);
-	wake_up(&bc_serv->sv_cb_waitq);
-	spin_unlock(&bc_serv->sv_cb_lock);
+	xprt_enqueue_bc_request(req);
 }
+
+void xprt_enqueue_bc_request(struct rpc_rqst *req)
+{
+	struct rpc_xprt *xprt = req->rq_xprt;
+	struct svc_serv *bc_serv;
+
+	xprt_get(xprt);
+	spin_lock(&xprt->bc_pa_lock);
+	bc_serv = xprt->bc_serv;
+	if (bc_serv) {
+		lwq_enqueue(&req->rq_bc_list, &bc_serv->sv_cb_list);
+		svc_pool_wake_idle_thread(&bc_serv->sv_pools[0]);
+	}
+	spin_unlock(&xprt->bc_pa_lock);
+}
+EXPORT_SYMBOL_GPL(xprt_enqueue_bc_request);

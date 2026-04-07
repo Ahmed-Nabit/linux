@@ -737,7 +737,19 @@ static void bcm2835_i2s_shutdown(struct snd_pcm_substream *substream,
 	bcm2835_i2s_stop_clock(dev);
 }
 
+static int bcm2835_i2s_dai_probe(struct snd_soc_dai *dai)
+{
+	struct bcm2835_i2s_dev *dev = snd_soc_dai_get_drvdata(dai);
+
+	snd_soc_dai_init_dma_data(dai,
+				  &dev->dma_data[SNDRV_PCM_STREAM_PLAYBACK],
+				  &dev->dma_data[SNDRV_PCM_STREAM_CAPTURE]);
+
+	return 0;
+}
+
 static const struct snd_soc_dai_ops bcm2835_i2s_dai_ops = {
+	.probe		= bcm2835_i2s_dai_probe,
 	.startup	= bcm2835_i2s_startup,
 	.shutdown	= bcm2835_i2s_shutdown,
 	.prepare	= bcm2835_i2s_prepare,
@@ -748,20 +760,8 @@ static const struct snd_soc_dai_ops bcm2835_i2s_dai_ops = {
 	.set_tdm_slot	= bcm2835_i2s_set_dai_tdm_slot,
 };
 
-static int bcm2835_i2s_dai_probe(struct snd_soc_dai *dai)
-{
-	struct bcm2835_i2s_dev *dev = snd_soc_dai_get_drvdata(dai);
-
-	snd_soc_dai_init_dma_data(dai,
-			&dev->dma_data[SNDRV_PCM_STREAM_PLAYBACK],
-			&dev->dma_data[SNDRV_PCM_STREAM_CAPTURE]);
-
-	return 0;
-}
-
 static struct snd_soc_dai_driver bcm2835_i2s_dai = {
 	.name	= "bcm2835-i2s",
-	.probe	= bcm2835_i2s_dai_probe,
 	.playback = {
 		.channels_min = 2,
 		.channels_max = 2,
@@ -817,7 +817,7 @@ static const struct regmap_config bcm2835_regmap_config = {
 	.max_register = BCM2835_I2S_GRAY_REG,
 	.precious_reg = bcm2835_i2s_precious_reg,
 	.volatile_reg = bcm2835_i2s_volatile_reg,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static const struct snd_soc_component_driver bcm2835_i2s_component = {
@@ -841,14 +841,9 @@ static int bcm2835_i2s_probe(struct platform_device *pdev)
 	/* get the clock */
 	dev->clk_prepared = false;
 	dev->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(dev->clk)) {
-		ret = PTR_ERR(dev->clk);
-		if (ret == -EPROBE_DEFER)
-			dev_dbg(&pdev->dev, "could not get clk: %d\n", ret);
-		else
-			dev_err(&pdev->dev, "could not get clk: %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(dev->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(dev->clk),
+				     "could not get clk\n");
 
 	/* Request ioarea */
 	base = devm_platform_ioremap_resource(pdev, 0);

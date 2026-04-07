@@ -165,7 +165,7 @@ static void if_usb_setup_firmware(struct lbs_private *priv)
 
 static void if_usb_fw_timeo(struct timer_list *t)
 {
-	struct if_usb_card *cardp = from_timer(cardp, t, fw_timeout);
+	struct if_usb_card *cardp = timer_container_of(cardp, t, fw_timeout);
 
 	if (cardp->fwdnldover) {
 		lbs_deb_usb("Download complete, no event. Assuming success\n");
@@ -203,7 +203,7 @@ static int if_usb_probe(struct usb_interface *intf,
 
 	udev = interface_to_usbdev(intf);
 
-	cardp = kzalloc(sizeof(struct if_usb_card), GFP_KERNEL);
+	cardp = kzalloc_obj(struct if_usb_card);
 	if (!cardp)
 		goto error;
 
@@ -426,6 +426,8 @@ static int usb_tx_block(struct if_usb_card *cardp, uint8_t *payload, uint16_t nb
 		goto tx_ret;
 	}
 
+	usb_kill_urb(cardp->tx_urb);
+
 	usb_fill_bulk_urb(cardp->tx_urb, cardp->udev,
 			  usb_sndbulkpipe(cardp->udev,
 					  cardp->ep_out),
@@ -637,7 +639,7 @@ static inline void process_cmdrequest(int recvlength, uint8_t *recvbuff,
 	priv->resp_len[i] = (recvlength - MESSAGE_HEADER_LEN);
 	memcpy(priv->resp_buf[i], recvbuff + MESSAGE_HEADER_LEN,
 		priv->resp_len[i]);
-	kfree_skb(skb);
+	dev_kfree_skb_irq(skb);
 	lbs_notify_command_response(priv, i);
 
 	spin_unlock_irqrestore(&priv->driver_lock, flags);
@@ -897,7 +899,7 @@ restart:
 	/* ... and wait for the process to complete */
 	wait_event_interruptible(cardp->fw_wq, cardp->surprise_removed || cardp->fwdnldover);
 
-	del_timer_sync(&cardp->fw_timeout);
+	timer_delete_sync(&cardp->fw_timeout);
 	usb_kill_urb(cardp->rx_urb);
 
 	if (!cardp->fwdnldover) {

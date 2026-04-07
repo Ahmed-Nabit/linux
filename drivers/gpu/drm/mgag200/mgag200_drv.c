@@ -6,20 +6,25 @@
  *          Dave Airlie
  */
 
+#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 
-#include <drm/drm_aperture.h>
+#include <drm/clients/drm_client_setup.h>
+#include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_ioctl.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_module.h>
 #include <drm/drm_pciids.h>
+#include <drm/drm_print.h>
 
 #include "mgag200_drv.h"
 
-int mgag200_modeset = -1;
+static int mgag200_modeset = -1;
 MODULE_PARM_DESC(modeset, "Disable/Enable modesetting");
 module_param_named(modeset, mgag200_modeset, int, 0400);
 
@@ -93,11 +98,11 @@ static const struct drm_driver mgag200_driver = {
 	.fops = &mgag200_driver_fops,
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
-	.date = DRIVER_DATE,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 	DRM_GEM_SHMEM_DRIVER_OPS,
+	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
 /*
@@ -144,26 +149,32 @@ int mgag200_device_preinit(struct mga_device *mdev)
 	}
 	mdev->vram_res = res;
 
-	/* Don't fail on errors, but performance might be reduced. */
-	devm_arch_io_reserve_memtype_wc(dev->dev, res->start, resource_size(res));
-	devm_arch_phys_wc_add(dev->dev, res->start, resource_size(res));
-
+#if defined(CONFIG_DRM_MGAG200_DISABLE_WRITECOMBINE)
 	mdev->vram = devm_ioremap(dev->dev, res->start, resource_size(res));
 	if (!mdev->vram)
 		return -ENOMEM;
+#else
+	mdev->vram = devm_ioremap_wc(dev->dev, res->start, resource_size(res));
+	if (!mdev->vram)
+		return -ENOMEM;
+
+	/* Don't fail on errors, but performance might be reduced. */
+	devm_arch_phys_wc_add(dev->dev, res->start, resource_size(res));
+#endif
 
 	return 0;
 }
 
-int mgag200_device_init(struct mga_device *mdev, enum mga_type type,
-			const struct mgag200_device_info *info)
+int mgag200_device_init(struct mga_device *mdev,
+			const struct mgag200_device_info *info,
+			const struct mgag200_device_funcs *funcs)
 {
 	struct drm_device *dev = &mdev->base;
 	u8 crtcext3, misc;
 	int ret;
 
 	mdev->info = info;
-	mdev->type = type;
+	mdev->funcs = funcs;
 
 	ret = drmm_mutex_init(dev, &mdev->rmmio_lock);
 	if (ret)
@@ -184,6 +195,8 @@ int mgag200_device_init(struct mga_device *mdev, enum mga_type type,
 
 	mutex_unlock(&mdev->rmmio_lock);
 
+	WREG32(MGAREG_IEN, 0);
+
 	return 0;
 }
 
@@ -202,6 +215,7 @@ static const struct pci_device_id mgag200_pciidlist[] = {
 	{ PCI_VENDOR_ID_MATROX, 0x534, PCI_ANY_ID, PCI_ANY_ID, 0, 0, G200_ER },
 	{ PCI_VENDOR_ID_MATROX, 0x536, PCI_ANY_ID, PCI_ANY_ID, 0, 0, G200_EW3 },
 	{ PCI_VENDOR_ID_MATROX, 0x538, PCI_ANY_ID, PCI_ANY_ID, 0, 0, G200_EH3 },
+	{ PCI_VENDOR_ID_MATROX, 0x53a, PCI_ANY_ID, PCI_ANY_ID, 0, 0, G200_EH5 },
 	{0,}
 };
 
@@ -215,7 +229,7 @@ mgag200_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct drm_device *dev;
 	int ret;
 
-	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, &mgag200_driver);
+	ret = aperture_remove_conflicting_pci_devices(pdev, mgag200_driver.name);
 	if (ret)
 		return ret;
 
@@ -226,29 +240,32 @@ mgag200_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	switch (type) {
 	case G200_PCI:
 	case G200_AGP:
-		mdev = mgag200_g200_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_SE_A:
 	case G200_SE_B:
 		mdev = mgag200_g200se_device_create(pdev, &mgag200_driver, type);
 		break;
 	case G200_WB:
-		mdev = mgag200_g200wb_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200wb_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_EV:
-		mdev = mgag200_g200ev_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200ev_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_EH:
-		mdev = mgag200_g200eh_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200eh_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_EH3:
-		mdev = mgag200_g200eh3_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200eh3_device_create(pdev, &mgag200_driver);
+		break;
+	case G200_EH5:
+		mdev = mgag200_g200eh5_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_ER:
-		mdev = mgag200_g200er_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200er_device_create(pdev, &mgag200_driver);
 		break;
 	case G200_EW3:
-		mdev = mgag200_g200ew3_device_create(pdev, &mgag200_driver, type);
+		mdev = mgag200_g200ew3_device_create(pdev, &mgag200_driver);
 		break;
 	default:
 		dev_err(&pdev->dev, "Device type %d is unsupported\n", type);
@@ -262,7 +279,11 @@ mgag200_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret)
 		return ret;
 
-	drm_fbdev_generic_setup(dev, 0);
+	/*
+	 * FIXME: A 24-bit color depth does not work with 24 bpp on
+	 * G200ER. Force 32 bpp.
+	 */
+	drm_client_setup_with_fourcc(dev, DRM_FORMAT_XRGB8888);
 
 	return 0;
 }
@@ -272,6 +293,12 @@ static void mgag200_pci_remove(struct pci_dev *pdev)
 	struct drm_device *dev = pci_get_drvdata(pdev);
 
 	drm_dev_unregister(dev);
+	drm_atomic_helper_shutdown(dev);
+}
+
+static void mgag200_pci_shutdown(struct pci_dev *pdev)
+{
+	drm_atomic_helper_shutdown(pci_get_drvdata(pdev));
 }
 
 static struct pci_driver mgag200_pci_driver = {
@@ -279,6 +306,7 @@ static struct pci_driver mgag200_pci_driver = {
 	.id_table = mgag200_pciidlist,
 	.probe = mgag200_pci_probe,
 	.remove = mgag200_pci_remove,
+	.shutdown = mgag200_pci_shutdown,
 };
 
 drm_module_pci_driver_if_modeset(mgag200_pci_driver, mgag200_modeset);

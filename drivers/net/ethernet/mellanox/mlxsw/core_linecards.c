@@ -531,7 +531,7 @@ int mlxsw_linecards_event_ops_register(struct mlxsw_core *mlxsw_core,
 
 	if (!linecards)
 		return 0;
-	item = kzalloc(sizeof(*item), GFP_KERNEL);
+	item = kzalloc_obj(*item);
 	if (!item)
 		return -ENOMEM;
 	item->event_ops = ops;
@@ -601,6 +601,8 @@ int mlxsw_linecard_devlink_info_get(struct mlxsw_linecard *linecard,
 		err = devlink_info_version_fixed_put(req,
 						     DEVLINK_INFO_VERSION_GENERIC_FW_PSID,
 						     info->psid);
+		if (err)
+			goto unlock;
 
 		sprintf(buf, "%u.%u.%u", info->fw_major, info->fw_minor,
 			info->fw_sub_minor);
@@ -783,6 +785,21 @@ static int mlxsw_linecard_status_get_and_process(struct mlxsw_core *mlxsw_core,
 		return err;
 
 	return mlxsw_linecard_status_process(linecards, linecard, mddq_pl);
+}
+
+static void mlxsw_linecards_irq_event_handler(struct mlxsw_core *mlxsw_core)
+{
+	struct mlxsw_linecards *linecards = mlxsw_core_linecards(mlxsw_core);
+	int i;
+
+	/* Handle change of line card active state. */
+	for (i = 0; i < linecards->count; i++) {
+		struct mlxsw_linecard *linecard = mlxsw_linecard_get(linecards,
+								     i + 1);
+
+		mlxsw_linecard_status_get_and_process(mlxsw_core, linecards,
+						      linecard);
+	}
 }
 
 static const char * const mlxsw_linecard_status_event_type_name[] = {
@@ -1175,7 +1192,7 @@ mlxsw_linecard_status_listener_func(const struct mlxsw_reg_info *reg,
 	struct mlxsw_linecard_status_event *event;
 	struct mlxsw_core *mlxsw_core = priv;
 
-	event = kmalloc(sizeof(*event), GFP_ATOMIC);
+	event = kmalloc_obj(*event, GFP_ATOMIC);
 	if (!event)
 		return;
 	event->mlxsw_core = mlxsw_core;
@@ -1208,7 +1225,7 @@ mlxsw_linecard_bct_listener_func(const struct mlxsw_reg_info *reg,
 	struct mlxsw_linecard_bct_event *event;
 	struct mlxsw_core *mlxsw_core = priv;
 
-	event = kmalloc(sizeof(*event), GFP_ATOMIC);
+	event = kmalloc_obj(*event, GFP_ATOMIC);
 	if (!event)
 		return;
 	event->mlxsw_core = mlxsw_core;
@@ -1238,27 +1255,54 @@ static int mlxsw_linecard_init(struct mlxsw_core *mlxsw_core,
 {
 	struct devlink_linecard *devlink_linecard;
 	struct mlxsw_linecard *linecard;
-	int err;
 
 	linecard = mlxsw_linecard_get(linecards, slot_index);
 	linecard->slot_index = slot_index;
 	linecard->linecards = linecards;
 	mutex_init(&linecard->lock);
 
-	devlink_linecard = devlink_linecard_create(priv_to_devlink(mlxsw_core),
-						   slot_index, &mlxsw_linecard_ops,
-						   linecard);
-	if (IS_ERR(devlink_linecard)) {
-		err = PTR_ERR(devlink_linecard);
-		goto err_devlink_linecard_create;
-	}
+	devlink_linecard = devl_linecard_create(priv_to_devlink(mlxsw_core),
+						slot_index, &mlxsw_linecard_ops,
+						linecard);
+	if (IS_ERR(devlink_linecard))
+		return PTR_ERR(devlink_linecard);
+
 	linecard->devlink_linecard = devlink_linecard;
 	INIT_DELAYED_WORK(&linecard->status_event_to_dw,
 			  &mlxsw_linecard_status_event_to_work);
 
+	return 0;
+}
+
+static void mlxsw_linecard_fini(struct mlxsw_core *mlxsw_core,
+				struct mlxsw_linecards *linecards,
+				u8 slot_index)
+{
+	struct mlxsw_linecard *linecard;
+
+	linecard = mlxsw_linecard_get(linecards, slot_index);
+	cancel_delayed_work_sync(&linecard->status_event_to_dw);
+	/* Make sure all scheduled events are processed */
+	mlxsw_core_flush_owq();
+	if (linecard->active)
+		mlxsw_linecard_active_clear(linecard);
+	mlxsw_linecard_bdev_del(linecard);
+	devl_linecard_destroy(linecard->devlink_linecard);
+	mutex_destroy(&linecard->lock);
+}
+
+static int
+mlxsw_linecard_event_delivery_init(struct mlxsw_core *mlxsw_core,
+				   struct mlxsw_linecards *linecards,
+				   u8 slot_index)
+{
+	struct mlxsw_linecard *linecard;
+	int err;
+
+	linecard = mlxsw_linecard_get(linecards, slot_index);
 	err = mlxsw_linecard_event_delivery_set(mlxsw_core, linecard, true);
 	if (err)
-		goto err_event_delivery_set;
+		return err;
 
 	err = mlxsw_linecard_status_get_and_process(mlxsw_core, linecards,
 						    linecard);
@@ -1269,29 +1313,18 @@ static int mlxsw_linecard_init(struct mlxsw_core *mlxsw_core,
 
 err_status_get_and_process:
 	mlxsw_linecard_event_delivery_set(mlxsw_core, linecard, false);
-err_event_delivery_set:
-	devlink_linecard_destroy(linecard->devlink_linecard);
-err_devlink_linecard_create:
-	mutex_destroy(&linecard->lock);
 	return err;
 }
 
-static void mlxsw_linecard_fini(struct mlxsw_core *mlxsw_core,
-				struct mlxsw_linecards *linecards,
-				u8 slot_index)
+static void
+mlxsw_linecard_event_delivery_fini(struct mlxsw_core *mlxsw_core,
+				   struct mlxsw_linecards *linecards,
+				   u8 slot_index)
 {
 	struct mlxsw_linecard *linecard;
 
 	linecard = mlxsw_linecard_get(linecards, slot_index);
 	mlxsw_linecard_event_delivery_set(mlxsw_core, linecard, false);
-	cancel_delayed_work_sync(&linecard->status_event_to_dw);
-	/* Make sure all scheduled events are processed */
-	mlxsw_core_flush_owq();
-	if (linecard->active)
-		mlxsw_linecard_active_clear(linecard);
-	mlxsw_linecard_bdev_del(linecard);
-	devlink_linecard_destroy(linecard->devlink_linecard);
-	mutex_destroy(&linecard->lock);
 }
 
 /*       LINECARDS INI BUNDLE FILE
@@ -1413,7 +1446,7 @@ static int mlxsw_linecard_types_init(struct mlxsw_core *mlxsw_core,
 		return 0;
 	}
 
-	types_info = kzalloc(sizeof(*types_info), GFP_KERNEL);
+	types_info = kzalloc_obj(*types_info);
 	if (!types_info) {
 		release_firmware(firmware);
 		return -ENOMEM;
@@ -1436,9 +1469,8 @@ static int mlxsw_linecard_types_init(struct mlxsw_core *mlxsw_core,
 		goto err_type_file_file_validate;
 	}
 
-	types_info->ini_files = kmalloc_array(types_info->count,
-					      sizeof(struct mlxsw_linecard_ini_file *),
-					      GFP_KERNEL);
+	types_info->ini_files = kmalloc_objs(struct mlxsw_linecard_ini_file *,
+					     types_info->count);
 	if (!types_info->ini_files) {
 		err = -ENOMEM;
 		goto err_ini_files_alloc;
@@ -1453,6 +1485,7 @@ err_type_file_file_validate:
 	vfree(types_info->data);
 err_data_alloc:
 	kfree(types_info);
+	linecards->types_info = NULL;
 	return err;
 }
 
@@ -1505,6 +1538,11 @@ int mlxsw_linecards_init(struct mlxsw_core *mlxsw_core,
 	if (err)
 		goto err_traps_register;
 
+	err = mlxsw_core_irq_event_handler_register(mlxsw_core,
+						    mlxsw_linecards_irq_event_handler);
+	if (err)
+		goto err_irq_event_handler_register;
+
 	mlxsw_core_linecards_set(mlxsw_core, linecards);
 
 	for (i = 0; i < linecards->count; i++) {
@@ -1513,11 +1551,25 @@ int mlxsw_linecards_init(struct mlxsw_core *mlxsw_core,
 			goto err_linecard_init;
 	}
 
+	for (i = 0; i < linecards->count; i++) {
+		err = mlxsw_linecard_event_delivery_init(mlxsw_core, linecards,
+							 i + 1);
+		if (err)
+			goto err_linecard_event_delivery_init;
+	}
+
 	return 0;
 
+err_linecard_event_delivery_init:
+	for (i--; i >= 0; i--)
+		mlxsw_linecard_event_delivery_fini(mlxsw_core, linecards, i + 1);
+	i = linecards->count;
 err_linecard_init:
 	for (i--; i >= 0; i--)
 		mlxsw_linecard_fini(mlxsw_core, linecards, i + 1);
+	mlxsw_core_irq_event_handler_unregister(mlxsw_core,
+						mlxsw_linecards_irq_event_handler);
+err_irq_event_handler_register:
 	mlxsw_core_traps_unregister(mlxsw_core, mlxsw_linecard_listener,
 				    ARRAY_SIZE(mlxsw_linecard_listener),
 				    mlxsw_core);
@@ -1536,7 +1588,11 @@ void mlxsw_linecards_fini(struct mlxsw_core *mlxsw_core)
 	if (!linecards)
 		return;
 	for (i = 0; i < linecards->count; i++)
+		mlxsw_linecard_event_delivery_fini(mlxsw_core, linecards, i + 1);
+	for (i = 0; i < linecards->count; i++)
 		mlxsw_linecard_fini(mlxsw_core, linecards, i + 1);
+	mlxsw_core_irq_event_handler_unregister(mlxsw_core,
+						mlxsw_linecards_irq_event_handler);
 	mlxsw_core_traps_unregister(mlxsw_core, mlxsw_linecard_listener,
 				    ARRAY_SIZE(mlxsw_linecard_listener),
 				    mlxsw_core);

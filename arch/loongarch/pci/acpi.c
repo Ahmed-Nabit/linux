@@ -26,9 +26,12 @@ void pcibios_add_bus(struct pci_bus *bus)
 
 int pcibios_root_bridge_prepare(struct pci_host_bridge *bridge)
 {
-	struct pci_config_window *cfg = bridge->bus->sysdata;
-	struct acpi_device *adev = to_acpi_device(cfg->parent);
+	struct acpi_device *adev = NULL;
 	struct device *bus_dev = &bridge->bus->dev;
+	struct pci_config_window *cfg = bridge->bus->sysdata;
+
+	if (!acpi_disabled)
+		adev = to_acpi_device(cfg->parent);
 
 	ACPI_COMPANION_SET(&bridge->dev, adev);
 	set_dev_node(bus_dev, pa_to_nid(cfg->res.start));
@@ -83,6 +86,69 @@ static int acpi_prepare_root_resources(struct acpi_pci_root_info *ci)
 }
 
 /*
+ * Create a PCI config space window
+ *  - reserve mem region
+ *  - alloc struct pci_config_window with space for all mappings
+ *  - ioremap the config space
+ */
+static struct pci_config_window *arch_pci_ecam_create(struct device *dev,
+		struct resource *cfgres, struct resource *busr, const struct pci_ecam_ops *ops)
+{
+	int bsz, bus_range, err;
+	struct resource *conflict;
+	struct pci_config_window *cfg;
+
+	if (busr->start > busr->end)
+		return ERR_PTR(-EINVAL);
+
+	cfg = kzalloc_obj(*cfg);
+	if (!cfg)
+		return ERR_PTR(-ENOMEM);
+
+	cfg->parent = dev;
+	cfg->ops = ops;
+	cfg->busr.start = busr->start;
+	cfg->busr.end = busr->end;
+	cfg->busr.flags = IORESOURCE_BUS;
+	bus_range = resource_size(cfgres) >> ops->bus_shift;
+
+	bsz = 1 << ops->bus_shift;
+
+	cfg->res.start = cfgres->start;
+	cfg->res.end = cfgres->end;
+	cfg->res.flags = IORESOURCE_MEM | IORESOURCE_BUSY;
+	cfg->res.name = "PCI ECAM";
+
+	conflict = request_resource_conflict(&iomem_resource, &cfg->res);
+	if (conflict) {
+		err = -EBUSY;
+		dev_err(dev, "can't claim ECAM area %pR: address conflict with %s %pR\n",
+			&cfg->res, conflict->name, conflict);
+		goto err_exit;
+	}
+
+	cfg->win = pci_remap_cfgspace(cfgres->start, bus_range * bsz);
+	if (!cfg->win)
+		goto err_exit_iomap;
+
+	if (ops->init) {
+		err = ops->init(cfg);
+		if (err)
+			goto err_exit;
+	}
+	dev_info(dev, "ECAM at %pR for %pR\n", &cfg->res, &cfg->busr);
+
+	return cfg;
+
+err_exit_iomap:
+	err = -ENOMEM;
+	dev_err(dev, "ECAM ioremap failed\n");
+err_exit:
+	pci_ecam_free(cfg);
+	return ERR_PTR(err);
+}
+
+/*
  * Lookup the bus range for the domain in MCFG, and set up config space
  * mapping.
  */
@@ -106,11 +172,16 @@ pci_acpi_setup_ecam_mapping(struct acpi_pci_root *root)
 
 	bus_shift = ecam_ops->bus_shift ? : 20;
 
-	cfgres.start = root->mcfg_addr + (bus_res->start << bus_shift);
-	cfgres.end = cfgres.start + (resource_size(bus_res) << bus_shift) - 1;
-	cfgres.flags = IORESOURCE_MEM;
+	if (bus_shift == 20)
+		cfg = pci_ecam_create(dev, &cfgres, bus_res, ecam_ops);
+	else {
+		cfgres.start = root->mcfg_addr + (bus_res->start << bus_shift);
+		cfgres.end = cfgres.start + (resource_size(bus_res) << bus_shift) - 1;
+		cfgres.end |= BIT(28) + (((PCI_CFG_SPACE_EXP_SIZE - 1) & 0xf00) << 16);
+		cfgres.flags = IORESOURCE_MEM;
+		cfg = arch_pci_ecam_create(dev, &cfgres, bus_res, ecam_ops);
+	}
 
-	cfg = pci_ecam_create(dev, &cfgres, bus_res, ecam_ops);
 	if (IS_ERR(cfg)) {
 		dev_err(dev, "%04x:%pR error %ld mapping ECAM\n", seg, bus_res, PTR_ERR(cfg));
 		return NULL;
@@ -123,17 +194,18 @@ struct pci_bus *pci_acpi_scan_root(struct acpi_pci_root *root)
 {
 	struct pci_bus *bus;
 	struct pci_root_info *info;
+	struct pci_host_bridge *host;
 	struct acpi_pci_root_ops *root_ops;
 	int domain = root->segment;
 	int busnum = root->secondary.start;
 
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	info = kzalloc_obj(*info);
 	if (!info) {
 		pr_warn("pci_bus %04x:%02x: ignored (out of memory)\n", domain, busnum);
 		return NULL;
 	}
 
-	root_ops = kzalloc(sizeof(*root_ops), GFP_KERNEL);
+	root_ops = kzalloc_obj(*root_ops);
 	if (!root_ops) {
 		kfree(info);
 		return NULL;
@@ -154,6 +226,7 @@ struct pci_bus *pci_acpi_scan_root(struct acpi_pci_root *root)
 	if (bus) {
 		memcpy(bus->sysdata, info->cfg, sizeof(struct pci_config_window));
 		kfree(info);
+		kfree(root_ops);
 	} else {
 		struct pci_bus *child;
 
@@ -165,8 +238,17 @@ struct pci_bus *pci_acpi_scan_root(struct acpi_pci_root *root)
 			return NULL;
 		}
 
-		pci_bus_size_bridges(bus);
-		pci_bus_assign_resources(bus);
+		/* If we must preserve the resource configuration, claim now */
+		host = pci_find_host_bridge(bus);
+		if (host->preserve_config)
+			pci_bus_claim_resources(bus);
+
+		/*
+		 * Assign whatever was left unassigned. If we didn't claim above,
+		 * this will reassign everything.
+		 */
+		pci_assign_unassigned_root_bus_resources(bus);
+
 		list_for_each_entry(child, &bus->children, node)
 			pcie_bus_configure_settings(child);
 	}

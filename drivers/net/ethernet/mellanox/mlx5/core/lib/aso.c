@@ -3,6 +3,7 @@
 
 #include <linux/mlx5/device.h>
 #include <linux/mlx5/transobj.h>
+#include "clock.h"
 #include "aso.h"
 #include "wq.h"
 
@@ -80,7 +81,7 @@ static int create_aso_cq(struct mlx5_aso_cq *cq, void *cqc_data)
 	int inlen, eqn;
 	int err;
 
-	err = mlx5_vector2eqn(mdev, 0, &eqn);
+	err = mlx5_comp_eqn_get(mdev, 0, &eqn);
 	if (err)
 		return err;
 
@@ -97,9 +98,9 @@ static int create_aso_cq(struct mlx5_aso_cq *cq, void *cqc_data)
 	mlx5_fill_page_frag_array(&cq->wq_ctrl.buf,
 				  (__be64 *)MLX5_ADDR_OF(create_cq_in, in, pas));
 
-	MLX5_SET(cqc,   cqc, cq_period_mode, DIM_CQ_PERIOD_MODE_START_FROM_EQE);
+	MLX5_SET(cqc,   cqc, cq_period_mode, MLX5_CQ_PERIOD_MODE_START_FROM_EQE);
 	MLX5_SET(cqc,   cqc, c_eqn_or_apu_element, eqn);
-	MLX5_SET(cqc,   cqc, uar_page,      mdev->priv.uar->index);
+	MLX5_SET(cqc,   cqc, uar_page,      mdev->priv.bfreg.up->index);
 	MLX5_SET(cqc,   cqc, log_page_size, cq->wq_ctrl.buf.page_shift -
 					    MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET64(cqc, cqc, dbr_addr,      cq->wq_ctrl.db.dma);
@@ -128,7 +129,7 @@ static int mlx5_aso_create_cq(struct mlx5_core_dev *mdev, int numa_node,
 		return -ENOMEM;
 
 	MLX5_SET(cqc, cqc_data, log_cq_size, 1);
-	MLX5_SET(cqc, cqc_data, uar_page, mdev->priv.uar->index);
+	MLX5_SET(cqc, cqc_data, uar_page, mdev->priv.bfreg.up->index);
 	if (MLX5_CAP_GEN(mdev, cqe_128_always) && cache_line_size() >= 128)
 		MLX5_SET(cqc, cqc_data, cqe_sz, CQE_STRIDE_128_PAD);
 
@@ -162,7 +163,7 @@ static int mlx5_aso_alloc_sq(struct mlx5_core_dev *mdev, int numa_node,
 	struct mlx5_wq_param param;
 	int err;
 
-	sq->uar_map = mdev->mlx5e_res.hw_objs.bfreg.map;
+	sq->uar_map = mdev->priv.bfreg.map;
 
 	param.db_numa_node = numa_node;
 	param.buf_numa_node = numa_node;
@@ -179,6 +180,7 @@ static int create_aso_sq(struct mlx5_core_dev *mdev, int pdn,
 {
 	void *in, *sqc, *wq;
 	int inlen, err;
+	u8 ts_format;
 
 	inlen = MLX5_ST_SZ_BYTES(create_sq_in) +
 		sizeof(u64) * sq->wq_ctrl.buf.npages;
@@ -195,8 +197,13 @@ static int create_aso_sq(struct mlx5_core_dev *mdev, int pdn,
 	MLX5_SET(sqc,  sqc, state, MLX5_SQC_STATE_RST);
 	MLX5_SET(sqc,  sqc, flush_in_error_en, 1);
 
+	ts_format = mlx5_is_real_time_sq(mdev) ?
+			MLX5_TIMESTAMP_FORMAT_REAL_TIME :
+			MLX5_TIMESTAMP_FORMAT_FREE_RUNNING;
+	MLX5_SET(sqc, sqc, ts_format, ts_format);
+
 	MLX5_SET(wq,   wq, wq_type,       MLX5_WQ_TYPE_CYCLIC);
-	MLX5_SET(wq,   wq, uar_page,      mdev->mlx5e_res.hw_objs.bfreg.index);
+	MLX5_SET(wq,   wq, uar_page,      mdev->priv.bfreg.index);
 	MLX5_SET(wq,   wq, log_wq_pg_sz,  sq->wq_ctrl.buf.page_shift -
 					  MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET64(wq, wq, dbr_addr,      sq->wq_ctrl.db.dma);
@@ -304,7 +311,7 @@ struct mlx5_aso *mlx5_aso_create(struct mlx5_core_dev *mdev, u32 pdn)
 	struct mlx5_aso *aso;
 	int err;
 
-	aso = kzalloc(sizeof(*aso), GFP_KERNEL);
+	aso = kzalloc_obj(*aso);
 	if (!aso)
 		return ERR_PTR(-ENOMEM);
 
@@ -327,9 +334,6 @@ err_cq:
 
 void mlx5_aso_destroy(struct mlx5_aso *aso)
 {
-	if (IS_ERR_OR_NULL(aso))
-		return;
-
 	mlx5_aso_destroy_sq(aso);
 	mlx5_aso_destroy_cq(&aso->cq);
 	kfree(aso);
@@ -349,12 +353,15 @@ void mlx5_aso_build_wqe(struct mlx5_aso *aso, u8 ds_cnt,
 	cseg->general_id = cpu_to_be32(obj_id);
 }
 
-void *mlx5_aso_get_wqe(struct mlx5_aso *aso)
+struct mlx5_aso_wqe *mlx5_aso_get_wqe(struct mlx5_aso *aso)
 {
+	struct mlx5_aso_wqe *wqe;
 	u16 pi;
 
 	pi = mlx5_wq_cyc_ctr2ix(&aso->wq, aso->pc);
-	return mlx5_wq_cyc_get_wqe(&aso->wq, pi);
+	wqe = mlx5_wq_cyc_get_wqe(&aso->wq, pi);
+	memset(wqe, 0, sizeof(*wqe));
+	return wqe;
 }
 
 void mlx5_aso_post_wqe(struct mlx5_aso *aso, bool with_data,
@@ -381,20 +388,12 @@ void mlx5_aso_post_wqe(struct mlx5_aso *aso, bool with_data,
 	WRITE_ONCE(doorbell_cseg, NULL);
 }
 
-int mlx5_aso_poll_cq(struct mlx5_aso *aso, bool with_data, u32 interval_ms)
+int mlx5_aso_poll_cq(struct mlx5_aso *aso, bool with_data)
 {
 	struct mlx5_aso_cq *cq = &aso->cq;
 	struct mlx5_cqe64 *cqe;
-	unsigned long expires;
 
 	cqe = mlx5_cqwq_get_cqe(&cq->wq);
-
-	expires = jiffies + msecs_to_jiffies(interval_ms);
-	while (!cqe && time_is_after_jiffies(expires)) {
-		usleep_range(2, 10);
-		cqe = mlx5_cqwq_get_cqe(&cq->wq);
-	}
-
 	if (!cqe)
 		return -ETIMEDOUT;
 

@@ -54,6 +54,13 @@ properties:
       - const: apb_pclk
       - const: atclk
 
+  power-domains:
+    maxItems: 1
+
+  label:
+    description:
+      Description of a coresight device.
+
   in-ports:
     $ref: /schemas/graph.yaml#/properties/ports
 

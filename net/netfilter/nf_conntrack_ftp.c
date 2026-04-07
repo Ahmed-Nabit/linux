@@ -33,6 +33,7 @@ MODULE_AUTHOR("Rusty Russell <rusty@rustcorp.com.au>");
 MODULE_DESCRIPTION("ftp connection tracking helper");
 MODULE_ALIAS("ip_conntrack_ftp");
 MODULE_ALIAS_NFCT_HELPER(HELPER_NAME);
+static DEFINE_SPINLOCK(nf_ftp_lock);
 
 #define MAX_PORTS 8
 static u_int16_t ports[MAX_PORTS];
@@ -42,13 +43,13 @@ module_param_array(ports, ushort, &ports_c, 0400);
 static bool loose;
 module_param(loose, bool, 0600);
 
-unsigned int (*nf_nat_ftp_hook)(struct sk_buff *skb,
-				enum ip_conntrack_info ctinfo,
-				enum nf_ct_ftp_type type,
-				unsigned int protoff,
-				unsigned int matchoff,
-				unsigned int matchlen,
-				struct nf_conntrack_expect *exp);
+unsigned int (__rcu *nf_nat_ftp_hook)(struct sk_buff *skb,
+				      enum ip_conntrack_info ctinfo,
+				      enum nf_ct_ftp_type type,
+				      unsigned int protoff,
+				      unsigned int matchoff,
+				      unsigned int matchlen,
+				      struct nf_conntrack_expect *exp);
 EXPORT_SYMBOL_GPL(nf_nat_ftp_hook);
 
 static int try_rfc959(const char *, size_t, struct nf_conntrack_man *,
@@ -409,7 +410,8 @@ static int help(struct sk_buff *skb,
 	}
 	datalen = skb->len - dataoff;
 
-	spin_lock_bh(&ct->lock);
+	/* seqadj (nat) uses ct->lock internally, nf_nat_ftp would cause deadlock */
+	spin_lock_bh(&nf_ftp_lock);
 	fb_ptr = skb->data + dataoff;
 
 	ends_in_nl = (fb_ptr[datalen - 1] == '\n');
@@ -538,7 +540,7 @@ out_update_nl:
 	if (ends_in_nl)
 		update_nl_seq(ct, seq, ct_ftp_info, dir, skb);
  out:
-	spin_unlock_bh(&ct->lock);
+	spin_unlock_bh(&nf_ftp_lock);
 	return ret;
 }
 

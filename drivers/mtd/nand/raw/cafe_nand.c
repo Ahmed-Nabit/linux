@@ -358,7 +358,7 @@ static int cafe_nand_read_oob(struct nand_chip *chip, int page)
 	return nand_read_oob_op(chip, page, 0, chip->oob_poi, mtd->oobsize);
 }
 /**
- * cafe_nand_read_page_syndrome - [REPLACEABLE] hardware ecc syndrome based page read
+ * cafe_nand_read_page - [REPLACEABLE] hardware ecc syndrome based page read
  * @chip:	nand chip info structure
  * @buf:	buffer to store read data
  * @oob_required:	caller expects OOB data read to chip->oob_poi
@@ -678,7 +678,7 @@ static int cafe_nand_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
-	cafe = kzalloc(sizeof(*cafe), GFP_KERNEL);
+	cafe = kzalloc_obj(*cafe);
 	if (!cafe) {
 		err = -ENOMEM;
 		goto out_disable_device;

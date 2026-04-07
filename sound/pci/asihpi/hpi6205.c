@@ -430,7 +430,7 @@ void HPI_6205(struct hpi_message *phm, struct hpi_response *phr)
 		pao = hpi_find_adapter(phm->adapter_index);
 	} else {
 		/* subsys messages don't address an adapter */
-		_HPI_6205(NULL, phm, phr);
+		phr->error = HPI_ERROR_INVALID_OBJ_INDEX;
 		return;
 	}
 
@@ -461,7 +461,7 @@ static void subsys_create_adapter(struct hpi_message *phm,
 
 	memset(&ao, 0, sizeof(ao));
 
-	ao.priv = kzalloc(sizeof(struct hpi_hw_obj), GFP_KERNEL);
+	ao.priv = kzalloc_obj(struct hpi_hw_obj);
 	if (!ao.priv) {
 		HPI_DEBUG_LOG(ERROR, "can't get mem for adapter object\n");
 		phr->error = HPI_ERROR_MEMORY_ALLOC;

@@ -300,8 +300,8 @@ static void prestera_ethtool_get_drvinfo(struct net_device *dev,
 	struct prestera_port *port = netdev_priv(dev);
 	struct prestera_switch *sw = port->sw;
 
-	strlcpy(drvinfo->driver, driver_kind, sizeof(drvinfo->driver));
-	strlcpy(drvinfo->bus_info, dev_name(prestera_dev(sw)),
+	strscpy(drvinfo->driver, driver_kind, sizeof(drvinfo->driver));
+	strscpy(drvinfo->bus_info, dev_name(prestera_dev(sw)),
 		sizeof(drvinfo->bus_info));
 	snprintf(drvinfo->fw_version, sizeof(drvinfo->fw_version),
 		 "%d.%d.%d",
@@ -714,11 +714,6 @@ static int prestera_ethtool_set_fecparam(struct net_device *dev,
 
 	if (port->autoneg) {
 		netdev_err(dev, "FEC set is not allowed while autoneg is on\n");
-		return -EINVAL;
-	}
-
-	if (port->caps.transceiver == PRESTERA_PORT_TCVR_SFP) {
-		netdev_err(dev, "FEC set is not allowed on non-SFP ports\n");
 		return -EINVAL;
 	}
 

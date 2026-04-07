@@ -71,7 +71,7 @@ gather_bo_pin(struct device *dev, struct host1x_bo *bo, enum dma_data_direction 
 	struct host1x_bo_mapping *map;
 	int err;
 
-	map = kzalloc(sizeof(*map), GFP_KERNEL);
+	map = kzalloc_obj(*map);
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 
@@ -80,7 +80,7 @@ gather_bo_pin(struct device *dev, struct host1x_bo *bo, enum dma_data_direction 
 	map->direction = direction;
 	map->dev = dev;
 
-	map->sgt = kzalloc(sizeof(*map->sgt), GFP_KERNEL);
+	map->sgt = kzalloc_obj(*map->sgt);
 	if (!map->sgt) {
 		err = -ENOMEM;
 		goto free;
@@ -133,7 +133,7 @@ static void gather_bo_munmap(struct host1x_bo *host_bo, void *addr)
 {
 }
 
-const struct host1x_bo_ops gather_bo_ops = {
+static const struct host1x_bo_ops gather_bo_ops = {
 	.get = gather_bo_get,
 	.put = gather_bo_put,
 	.pin = gather_bo_pin,
@@ -169,14 +169,9 @@ static void *alloc_copy_user_array(void __user *from, size_t count, size_t size)
 	if (copy_len > 0x4000)
 		return ERR_PTR(-E2BIG);
 
-	data = kvmalloc(copy_len, GFP_KERNEL);
-	if (!data)
-		return ERR_PTR(-ENOMEM);
-
-	if (copy_from_user(data, from, copy_len)) {
-		kvfree(data);
-		return ERR_PTR(-EFAULT);
-	}
+	data = vmemdup_user(from, copy_len);
+	if (IS_ERR(data))
+		return ERR_CAST(data);
 
 	return data;
 }
@@ -198,7 +193,7 @@ static int submit_copy_gather_data(struct gather_bo **pbo, struct device *dev,
 		return -EINVAL;
 	}
 
-	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
+	bo = kzalloc_obj(*bo);
 	if (!bo) {
 		SUBMIT_ERR(context, "failed to allocate memory for bo info");
 		return -ENOMEM;
@@ -275,7 +270,7 @@ static int submit_process_bufs(struct tegra_drm_context *context, struct gather_
 		return PTR_ERR(bufs);
 	}
 
-	mappings = kcalloc(args->num_bufs, sizeof(*mappings), GFP_KERNEL);
+	mappings = kzalloc_objs(*mappings, args->num_bufs);
 	if (!mappings) {
 		SUBMIT_ERR(context, "failed to allocate memory for mapping info");
 		err = -ENOMEM;
@@ -565,7 +560,7 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 	if (err)
 		goto unlock;
 
-	job_data = kzalloc(sizeof(*job_data), GFP_KERNEL);
+	job_data = kzalloc_obj(*job_data);
 	if (!job_data) {
 		SUBMIT_ERR(context, "failed to allocate memory for job data");
 		err = -ENOMEM;
@@ -614,21 +609,13 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 			host1x_memory_context_get(job->memory_context);
 		}
 	} else if (context->client->ops->get_streamid_offset) {
-#ifdef CONFIG_IOMMU_API
-		struct iommu_fwspec *spec;
-
 		/*
 		 * Job submission will need to temporarily change stream ID,
 		 * so need to tell it what to change it back to.
 		 */
-		spec = dev_iommu_fwspec_get(context->client->base.dev);
-		if (spec && spec->num_ids > 0)
-			job->engine_fallback_streamid = spec->ids[0] & 0xffff;
-		else
-			job->engine_fallback_streamid = 0x7f;
-#else
-		job->engine_fallback_streamid = 0x7f;
-#endif
+		if (!tegra_dev_iommu_get_stream_id(context->client->base.dev,
+						   &job->engine_fallback_streamid))
+			job->engine_fallback_streamid = TEGRA_STREAM_ID_BYPASS;
 	}
 
 	/* Boot engine. */
@@ -659,7 +646,7 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 	args->syncpt.value = job->syncpt_end;
 
 	if (syncobj) {
-		struct dma_fence *fence = host1x_fence_create(job->syncpt, job->syncpt_end);
+		struct dma_fence *fence = host1x_fence_create(job->syncpt, job->syncpt_end, true);
 		if (IS_ERR(fence)) {
 			err = PTR_ERR(fence);
 			SUBMIT_ERR(context, "failed to create postfence: %d", err);
@@ -685,8 +672,7 @@ free_job_data:
 		kfree(job_data->used_mappings);
 	}
 
-	if (job_data)
-		kfree(job_data);
+	kfree(job_data);
 put_bo:
 	gather_bo_put(&bo->base);
 unlock:

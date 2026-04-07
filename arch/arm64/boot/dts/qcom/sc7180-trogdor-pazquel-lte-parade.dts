@@ -11,10 +11,11 @@
 #include "sc7180-trogdor-parade-ps8640.dtsi"
 #include "sc7180-trogdor-pazquel.dtsi"
 #include "sc7180-trogdor-lte-sku.dtsi"
+#include "sc7180-trogdor-rt5682i-sku.dtsi"
 
 / {
 	model = "Google Pazquel (Parade,LTE)";
-	compatible = "google,pazquel-sku4", "qcom,sc7180";
+	compatible = "google,pazquel-sku6", "google,pazquel-sku4", "qcom,sc7180";
 };
 
 &ap_sar_sensor_i2c {

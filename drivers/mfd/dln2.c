@@ -14,7 +14,6 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
-#include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/core.h>
@@ -126,7 +125,7 @@ int dln2_register_event_cb(struct platform_device *pdev, u16 id,
 	unsigned long flags;
 	int ret = 0;
 
-	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+	entry = kzalloc_obj(*entry);
 	if (!entry)
 		return -ENOMEM;
 
@@ -779,7 +778,7 @@ static int dln2_probe(struct usb_interface *interface,
 	if (ret)
 		return ret;
 
-	dln2 = kzalloc(sizeof(*dln2), GFP_KERNEL);
+	dln2 = kzalloc_obj(*dln2);
 	if (!dln2)
 		return -ENOMEM;
 

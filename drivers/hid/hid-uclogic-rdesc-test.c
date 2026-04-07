@@ -9,6 +9,8 @@
 #include <kunit/test.h>
 #include "./hid-uclogic-rdesc.h"
 
+MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
+
 struct uclogic_template_case {
 	const char *name;
 	const __u8 *template;
@@ -97,7 +99,7 @@ static const __u8 template_params_none[] = {
 
 static struct uclogic_template_case uclogic_template_cases[] = {
 	{
-		.name = "Empty template",
+		.name = "empty_template",
 		.template = template_empty,
 		.template_size = sizeof(template_empty),
 		.param_list = params_pen_all,
@@ -105,7 +107,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = template_empty,
 	},
 	{
-		.name = "Template smaller than the placeholder",
+		.name = "template_smaller_than_the_placeholder",
 		.template = template_small,
 		.template_size = sizeof(template_small),
 		.param_list = params_pen_all,
@@ -113,7 +115,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = template_small,
 	},
 	{
-		.name = "No placeholder",
+		.name = "no_placeholder",
 		.template = template_no_ph,
 		.template_size = sizeof(template_no_ph),
 		.param_list = params_pen_all,
@@ -121,7 +123,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = template_no_ph,
 	},
 	{
-		.name = "Pen placeholder at the end, without ID",
+		.name = "pen_placeholder_at_the_end_without_id",
 		.template = template_pen_ph_end,
 		.template_size = sizeof(template_pen_ph_end),
 		.param_list = params_pen_all,
@@ -129,7 +131,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = template_pen_ph_end,
 	},
 	{
-		.name = "Frame button placeholder at the end, without ID",
+		.name = "frame_button_placeholder_at_the_end_without_id",
 		.template = template_btn_ph_end,
 		.template_size = sizeof(template_btn_ph_end),
 		.param_list = params_frame_all,
@@ -137,7 +139,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = template_btn_ph_end,
 	},
 	{
-		.name = "All params present in the pen template",
+		.name = "all_params_present_in_the_pen_template",
 		.template = template_pen_all_params,
 		.template_size = sizeof(template_pen_all_params),
 		.param_list = params_pen_all,
@@ -145,7 +147,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = expected_pen_all_params,
 	},
 	{
-		.name = "All params present in the frame template",
+		.name = "all_params_present_in_the_frame_template",
 		.template = template_frame_all_params,
 		.template_size = sizeof(template_frame_all_params),
 		.param_list = params_frame_all,
@@ -153,7 +155,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = expected_frame_all_params,
 	},
 	{
-		.name = "Some params present in the pen template (complete param list)",
+		.name = "some_params_present_in_the_pen_template_with_complete_param_list",
 		.template = template_pen_some_params,
 		.template_size = sizeof(template_pen_some_params),
 		.param_list = params_pen_all,
@@ -161,7 +163,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = expected_pen_some_params,
 	},
 	{
-		.name = "Some params present in the pen template (incomplete param list)",
+		.name = "some_params_present_in_the_pen_template_with_incomplete_param_list",
 		.template = template_pen_some_params,
 		.template_size = sizeof(template_pen_some_params),
 		.param_list = params_pen_some,
@@ -169,7 +171,7 @@ static struct uclogic_template_case uclogic_template_cases[] = {
 		.expected = expected_pen_some_params,
 	},
 	{
-		.name = "No params present in the template",
+		.name = "no_params_present_in_the_template",
 		.template = template_params_none,
 		.template_size = sizeof(template_params_none),
 		.param_list = params_pen_some,
@@ -187,7 +189,7 @@ static void uclogic_template_case_desc(struct uclogic_template_case *t,
 KUNIT_ARRAY_PARAM(uclogic_template, uclogic_template_cases,
 		  uclogic_template_case_desc);
 
-static void uclogic_template_test(struct kunit *test)
+static void hid_test_uclogic_template(struct kunit *test)
 {
 	__u8 *res;
 	const struct uclogic_template_case *params = test->param_value;
@@ -197,18 +199,17 @@ static void uclogic_template_test(struct kunit *test)
 					   params->param_list,
 					   params->param_num);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, res);
-	KUNIT_EXPECT_EQ(test, 0,
-			memcmp(res, params->expected, params->template_size));
+	KUNIT_EXPECT_MEMEQ(test, res, params->expected, params->template_size);
 	kfree(res);
 }
 
 static struct kunit_case hid_uclogic_rdesc_test_cases[] = {
-	KUNIT_CASE_PARAM(uclogic_template_test, uclogic_template_gen_params),
+	KUNIT_CASE_PARAM(hid_test_uclogic_template, uclogic_template_gen_params),
 	{}
 };
 
 static struct kunit_suite hid_uclogic_rdesc_test_suite = {
-	.name = "hid-uclogic-rdesc-test",
+	.name = "hid_uclogic_rdesc_test",
 	.test_cases = hid_uclogic_rdesc_test_cases,
 };
 

@@ -504,8 +504,8 @@ static void sec_skcipher_alg_callback(struct sec_bd_info *sec_resp,
 		     kfifo_avail(&ctx->queue->softqueue) >
 		     backlog_req->num_elements)) {
 			sec_send_request(backlog_req, ctx->queue);
-			backlog_req->req_base->complete(backlog_req->req_base,
-							-EINPROGRESS);
+			crypto_request_complete(backlog_req->req_base,
+						-EINPROGRESS);
 			list_del(&backlog_req->backlog_head);
 		}
 	}
@@ -534,7 +534,7 @@ static void sec_skcipher_alg_callback(struct sec_bd_info *sec_resp,
 		if (skreq->src != skreq->dst)
 			dma_unmap_sg(dev, skreq->dst, sec_req->len_out,
 				     DMA_BIDIRECTIONAL);
-		skreq->base.complete(&skreq->base, sec_req->err);
+		skcipher_request_complete(skreq, sec_req->err);
 	}
 }
 
@@ -553,7 +553,7 @@ static int sec_alg_alloc_and_calc_split_sizes(int length, size_t **split_sizes,
 
 	/* Split into suitable sized blocks */
 	*steps = roundup(length, SEC_REQ_LIMIT) / SEC_REQ_LIMIT;
-	sizes = kcalloc(*steps, sizeof(*sizes), gfp);
+	sizes = kzalloc_objs(*sizes, *steps, gfp);
 	if (!sizes)
 		return -ENOMEM;
 
@@ -577,12 +577,12 @@ static int sec_map_and_split_sg(struct scatterlist *sgl, size_t *split_sizes,
 	if (!count)
 		return -EINVAL;
 
-	*splits = kcalloc(steps, sizeof(struct scatterlist *), gfp);
+	*splits = kzalloc_objs(struct scatterlist *, steps, gfp);
 	if (!*splits) {
 		ret = -ENOMEM;
 		goto err_unmap_sg;
 	}
-	*splits_nents = kcalloc(steps, sizeof(int), gfp);
+	*splits_nents = kzalloc_objs(int, steps, gfp);
 	if (!*splits_nents) {
 		ret = -ENOMEM;
 		goto err_free_splits;
@@ -637,7 +637,7 @@ static struct sec_request_el
 	struct sec_bd_info *req;
 	int ret;
 
-	el = kzalloc(sizeof(*el), gfp);
+	el = kzalloc_obj(*el, gfp);
 	if (!el)
 		return ERR_PTR(-ENOMEM);
 	el->el_length = el_size;

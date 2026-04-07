@@ -18,6 +18,7 @@
 #include <linux/limits.h>
 #include <linux/clk/clk-conf.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/reset.h>
 #include <linux/of_irq.h>
 #include <linux/of_device.h>
@@ -25,7 +26,7 @@
 #include <linux/iommu.h>
 #include <linux/dma-map-ops.h>
 
-#define to_amba_driver(d)	container_of(d, struct amba_driver, drv)
+#define to_amba_driver(d)	container_of_const(d, struct amba_driver, drv)
 
 /* called on periphid match and class 0x9 coresight device. */
 static int
@@ -137,7 +138,7 @@ static int amba_read_periphid(struct amba_device *dev)
 	void __iomem *tmp;
 	int i, ret;
 
-	ret = dev_pm_domain_attach(&dev->dev, true);
+	ret = dev_pm_domain_attach(&dev->dev, PD_FLAG_ATTACH_POWER_ON);
 	if (ret) {
 		dev_dbg(&dev->dev, "can't get PM domain: %d\n", ret);
 		goto err_out;
@@ -204,11 +205,12 @@ err_out:
 	return ret;
 }
 
-static int amba_match(struct device *dev, struct device_driver *drv)
+static int amba_match(struct device *dev, const struct device_driver *drv)
 {
 	struct amba_device *pcdev = to_amba_device(dev);
-	struct amba_driver *pcdrv = to_amba_driver(drv);
+	const struct amba_driver *pcdrv = to_amba_driver(drv);
 
+	mutex_lock(&pcdev->periphid_lock);
 	if (!pcdev->periphid) {
 		int ret = amba_read_periphid(pcdev);
 
@@ -218,11 +220,14 @@ static int amba_match(struct device *dev, struct device_driver *drv)
 		 * permanent failure in reading pid and cid, simply map it to
 		 * -EPROBE_DEFER.
 		 */
-		if (ret)
+		if (ret) {
+			mutex_unlock(&pcdev->periphid_lock);
 			return -EPROBE_DEFER;
+		}
 		dev_set_uevent_suppress(dev, false);
 		kobject_uevent(&dev->kobj, KOBJ_ADD);
 	}
+	mutex_unlock(&pcdev->periphid_lock);
 
 	/* When driver_override is set, only bind to the matching driver */
 	if (pcdev->driver_override)
@@ -231,9 +236,9 @@ static int amba_match(struct device *dev, struct device_driver *drv)
 	return amba_lookup(pcdrv->id_table, pcdev) != NULL;
 }
 
-static int amba_uevent(struct device *dev, struct kobj_uevent_env *env)
+static int amba_uevent(const struct device *dev, struct kobj_uevent_env *env)
 {
-	struct amba_device *pcdev = to_amba_device(dev);
+	const struct amba_device *pcdev = to_amba_device(dev);
 	int retval = 0;
 
 	retval = add_uevent_var(env, "AMBA_ID=%08x", pcdev->periphid);
@@ -286,15 +291,14 @@ static int amba_probe(struct device *dev)
 		if (ret < 0)
 			break;
 
-		ret = dev_pm_domain_attach(dev, true);
+		ret = dev_pm_domain_attach(dev, PD_FLAG_ATTACH_POWER_ON |
+						PD_FLAG_DETACH_POWER_OFF);
 		if (ret)
 			break;
 
 		ret = amba_get_enable_pclk(pcdev);
-		if (ret) {
-			dev_pm_domain_detach(dev, true);
+		if (ret)
 			break;
-		}
 
 		pm_runtime_get_noresume(dev);
 		pm_runtime_set_active(dev);
@@ -309,7 +313,6 @@ static int amba_probe(struct device *dev)
 		pm_runtime_put_noidle(dev);
 
 		amba_put_disable_pclk(pcdev);
-		dev_pm_domain_detach(dev, true);
 	} while (0);
 
 	return ret;
@@ -331,7 +334,6 @@ static void amba_remove(struct device *dev)
 	pm_runtime_put_noidle(dev);
 
 	amba_put_disable_pclk(pcdev);
-	dev_pm_domain_detach(dev, true);
 }
 
 static void amba_shutdown(struct device *dev)
@@ -359,7 +361,8 @@ static int amba_dma_configure(struct device *dev)
 		ret = acpi_dma_configure(dev, attr);
 	}
 
-	if (!ret && !drv->driver_managed_dma) {
+	/* @drv may not be valid when we're called from the IOMMU layer */
+	if (!ret && dev->driver && !drv->driver_managed_dma) {
 		ret = iommu_device_use_default_domain(dev);
 		if (ret)
 			arch_teardown_dma_ops(dev);
@@ -417,12 +420,6 @@ static int amba_pm_runtime_resume(struct device *dev)
 #endif /* CONFIG_PM */
 
 static const struct dev_pm_ops amba_pm = {
-	.suspend	= pm_generic_suspend,
-	.resume		= pm_generic_resume,
-	.freeze		= pm_generic_freeze,
-	.thaw		= pm_generic_thaw,
-	.poweroff	= pm_generic_poweroff,
-	.restore	= pm_generic_restore,
 	SET_RUNTIME_PM_OPS(
 		amba_pm_runtime_suspend,
 		amba_pm_runtime_resume,
@@ -436,7 +433,7 @@ static const struct dev_pm_ops amba_pm = {
  * DMA configuration for platform and AMBA bus is same. So here we reuse
  * platform's DMA config routine.
  */
-struct bus_type amba_bustype = {
+const struct bus_type amba_bustype = {
 	.name		= "amba",
 	.dev_groups	= amba_dev_groups,
 	.match		= amba_match,
@@ -449,6 +446,12 @@ struct bus_type amba_bustype = {
 	.pm		= &amba_pm,
 };
 EXPORT_SYMBOL_GPL(amba_bustype);
+
+bool dev_is_amba(const struct device *dev)
+{
+	return dev->bus == &amba_bustype;
+}
+EXPORT_SYMBOL_GPL(dev_is_amba);
 
 static int __init amba_init(void)
 {
@@ -489,28 +492,31 @@ static int __init amba_stub_drv_init(void)
 	 * waiting on amba_match(). So, register a stub driver to make sure
 	 * amba_match() is called even if no amba driver has been registered.
 	 */
-	return amba_driver_register(&amba_proxy_drv);
+	return __amba_driver_register(&amba_proxy_drv, NULL);
 }
 late_initcall_sync(amba_stub_drv_init);
 
 /**
- *	amba_driver_register - register an AMBA device driver
+ *	__amba_driver_register - register an AMBA device driver
  *	@drv: amba device driver structure
+ *	@owner: owning module/driver
  *
  *	Register an AMBA device driver with the Linux device model
  *	core.  If devices pre-exist, the drivers probe function will
  *	be called.
  */
-int amba_driver_register(struct amba_driver *drv)
+int __amba_driver_register(struct amba_driver *drv,
+			   struct module *owner)
 {
 	if (!drv->probe)
 		return -EINVAL;
 
+	drv->drv.owner = owner;
 	drv->drv.bus = &amba_bustype;
 
 	return driver_register(&drv->drv);
 }
-EXPORT_SYMBOL(amba_driver_register);
+EXPORT_SYMBOL(__amba_driver_register);
 
 /**
  *	amba_driver_unregister - remove an AMBA device driver
@@ -530,8 +536,10 @@ static void amba_device_release(struct device *dev)
 {
 	struct amba_device *d = to_amba_device(dev);
 
+	fwnode_handle_put(dev_fwnode(&d->dev));
 	if (d->res.parent)
 		release_resource(&d->res);
+	mutex_destroy(&d->periphid_lock);
 	kfree(d);
 }
 
@@ -547,6 +555,8 @@ static void amba_device_release(struct device *dev)
 int amba_device_add(struct amba_device *dev, struct resource *parent)
 {
 	int ret;
+
+	fwnode_handle_get(dev_fwnode(&dev->dev));
 
 	ret = request_resource(parent, &dev->res);
 	if (ret)
@@ -584,6 +594,7 @@ static void amba_device_initialize(struct amba_device *dev, const char *name)
 	dev->dev.dma_mask = &dev->dev.coherent_dma_mask;
 	dev->dev.dma_parms = &dev->dma_parms;
 	dev->res.name = dev_name(&dev->dev);
+	mutex_init(&dev->periphid_lock);
 }
 
 /**
@@ -600,7 +611,7 @@ struct amba_device *amba_device_alloc(const char *name, resource_size_t base,
 {
 	struct amba_device *dev;
 
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc_obj(*dev);
 	if (dev) {
 		amba_device_initialize(dev, name);
 		dev->res.start = base;

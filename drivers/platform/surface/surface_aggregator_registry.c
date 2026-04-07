@@ -12,6 +12,7 @@
 #include <linux/acpi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/types.h>
@@ -46,7 +47,7 @@ static const struct software_node ssam_node_hub_kip = {
 
 /* Base device hub (devices attached to Surface Book 3 base). */
 static const struct software_node ssam_node_hub_base = {
-	.name = "ssam:00:00:02:11:00",
+	.name = "ssam:00:00:01:11:00",
 	.parent = &ssam_node_root,
 };
 
@@ -68,9 +69,35 @@ static const struct software_node ssam_node_bat_sb3base = {
 	.parent = &ssam_node_hub_base,
 };
 
-/* Platform profile / performance-mode device. */
-static const struct software_node ssam_node_tmp_pprof = {
+/* Platform profile / performance-mode device without a fan. */
+static const struct software_node ssam_node_tmp_perf_profile = {
 	.name = "ssam:01:03:01:00:01",
+	.parent = &ssam_node_root,
+};
+
+/* Platform profile / performance-mode device with a fan, such that
+ * the fan controller profile can also be switched.
+ */
+static const struct property_entry ssam_node_tmp_perf_profile_has_fan[] = {
+	PROPERTY_ENTRY_BOOL("has_fan"),
+	{ }
+};
+
+static const struct software_node ssam_node_tmp_perf_profile_with_fan = {
+	.name = "ssam:01:03:01:00:01",
+	.parent = &ssam_node_root,
+	.properties = ssam_node_tmp_perf_profile_has_fan,
+};
+
+/* Thermal sensors. */
+static const struct software_node ssam_node_tmp_sensors = {
+	.name = "ssam:01:03:01:00:02",
+	.parent = &ssam_node_root,
+};
+
+/* Fan speed function. */
+static const struct software_node ssam_node_fan_speed = {
+	.name = "ssam:01:05:01:01:01",
 	.parent = &ssam_node_root,
 };
 
@@ -86,38 +113,38 @@ static const struct software_node ssam_node_bas_dtx = {
 	.parent = &ssam_node_root,
 };
 
-/* HID keyboard (TID1). */
-static const struct software_node ssam_node_hid_tid1_keyboard = {
+/* HID keyboard (SAM, TID=1). */
+static const struct software_node ssam_node_hid_sam_keyboard = {
 	.name = "ssam:01:15:01:01:00",
 	.parent = &ssam_node_root,
 };
 
-/* HID pen stash (TID1; pen taken / stashed away evens). */
-static const struct software_node ssam_node_hid_tid1_penstash = {
+/* HID pen stash (SAM, TID=1; pen taken / stashed away evens). */
+static const struct software_node ssam_node_hid_sam_penstash = {
 	.name = "ssam:01:15:01:02:00",
 	.parent = &ssam_node_root,
 };
 
-/* HID touchpad (TID1). */
-static const struct software_node ssam_node_hid_tid1_touchpad = {
+/* HID touchpad (SAM, TID=1). */
+static const struct software_node ssam_node_hid_sam_touchpad = {
 	.name = "ssam:01:15:01:03:00",
 	.parent = &ssam_node_root,
 };
 
-/* HID device instance 6 (TID1, unknown HID device). */
-static const struct software_node ssam_node_hid_tid1_iid6 = {
+/* HID device instance 6 (SAM, TID=1, HID sensor collection). */
+static const struct software_node ssam_node_hid_sam_sensors = {
 	.name = "ssam:01:15:01:06:00",
 	.parent = &ssam_node_root,
 };
 
-/* HID device instance 7 (TID1, unknown HID device). */
-static const struct software_node ssam_node_hid_tid1_iid7 = {
+/* HID device instance 7 (SAM, TID=1, UCM UCSI HID client). */
+static const struct software_node ssam_node_hid_sam_ucm_ucsi = {
 	.name = "ssam:01:15:01:07:00",
 	.parent = &ssam_node_root,
 };
 
-/* HID system controls (TID1). */
-static const struct software_node ssam_node_hid_tid1_sysctrl = {
+/* HID system controls (SAM, TID=1). */
+static const struct software_node ssam_node_hid_sam_sysctrl = {
 	.name = "ssam:01:15:01:08:00",
 	.parent = &ssam_node_root,
 };
@@ -182,8 +209,8 @@ static const struct software_node ssam_node_hid_kip_touchpad = {
 	.parent = &ssam_node_hub_kip,
 };
 
-/* HID device instance 5 (KIP hub, unknown HID device). */
-static const struct software_node ssam_node_hid_kip_iid5 = {
+/* HID device instance 5 (KIP hub, type-cover firmware update). */
+static const struct software_node ssam_node_hid_kip_fwupd = {
 	.name = "ssam:01:15:02:05:00",
 	.parent = &ssam_node_hub_kip,
 };
@@ -202,7 +229,7 @@ static const struct software_node ssam_node_pos_tablet_switch = {
  */
 static const struct software_node *ssam_node_group_gen5[] = {
 	&ssam_node_root,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	NULL,
 };
 
@@ -213,7 +240,7 @@ static const struct software_node *ssam_node_group_sb3[] = {
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
 	&ssam_node_bat_sb3base,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	&ssam_node_bas_dtx,
 	&ssam_node_hid_base_keyboard,
 	&ssam_node_hid_base_touchpad,
@@ -227,26 +254,85 @@ static const struct software_node *ssam_node_group_sl3[] = {
 	&ssam_node_root,
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	&ssam_node_hid_main_keyboard,
 	&ssam_node_hid_main_touchpad,
 	&ssam_node_hid_main_iid5,
 	NULL,
 };
 
-/* Devices for Surface Laptop Studio. */
-static const struct software_node *ssam_node_group_sls[] = {
+/* Devices for Surface Laptop 5. */
+static const struct software_node *ssam_node_group_sl5[] = {
 	&ssam_node_root,
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile_with_fan,
+	&ssam_node_tmp_sensors,
+	&ssam_node_fan_speed,
+	&ssam_node_hid_main_keyboard,
+	&ssam_node_hid_main_touchpad,
+	&ssam_node_hid_main_iid5,
+	&ssam_node_hid_sam_ucm_ucsi,
+	NULL,
+};
+
+/* Devices for Surface Laptop 6. */
+static const struct software_node *ssam_node_group_sl6[] = {
+	&ssam_node_root,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_perf_profile_with_fan,
+	&ssam_node_tmp_sensors,
+	&ssam_node_fan_speed,
+	&ssam_node_hid_main_keyboard,
+	&ssam_node_hid_main_touchpad,
+	&ssam_node_hid_main_iid5,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_hid_sam_ucm_ucsi,
+	NULL,
+};
+
+/* Devices for Surface Laptop 7. */
+static const struct software_node *ssam_node_group_sl7[] = {
+	&ssam_node_root,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_perf_profile_with_fan,
+	&ssam_node_fan_speed,
+	&ssam_node_hid_sam_keyboard,
+	/* TODO: evaluate thermal sensors devices when we get a driver for that */
+	NULL,
+};
+
+/* Devices for Surface Laptop Studio 1. */
+static const struct software_node *ssam_node_group_sls1[] = {
+	&ssam_node_root,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_perf_profile,
 	&ssam_node_pos_tablet_switch,
-	&ssam_node_hid_tid1_keyboard,
-	&ssam_node_hid_tid1_penstash,
-	&ssam_node_hid_tid1_touchpad,
-	&ssam_node_hid_tid1_iid6,
-	&ssam_node_hid_tid1_iid7,
-	&ssam_node_hid_tid1_sysctrl,
+	&ssam_node_hid_sam_keyboard,
+	&ssam_node_hid_sam_penstash,
+	&ssam_node_hid_sam_touchpad,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_hid_sam_ucm_ucsi,
+	&ssam_node_hid_sam_sysctrl,
+	NULL,
+};
+
+/* Devices for Surface Laptop Studio 2. */
+static const struct software_node *ssam_node_group_sls2[] = {
+	&ssam_node_root,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_perf_profile_with_fan,
+	&ssam_node_tmp_sensors,
+	&ssam_node_fan_speed,
+	&ssam_node_pos_tablet_switch,
+	&ssam_node_hid_sam_keyboard,
+	&ssam_node_hid_sam_penstash,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_hid_sam_ucm_ucsi,
 	NULL,
 };
 
@@ -255,7 +341,7 @@ static const struct software_node *ssam_node_group_slg1[] = {
 	&ssam_node_root,
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	NULL,
 };
 
@@ -264,28 +350,81 @@ static const struct software_node *ssam_node_group_sp7[] = {
 	&ssam_node_root,
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	NULL,
 };
 
+/* Devices for Surface Pro 8 */
 static const struct software_node *ssam_node_group_sp8[] = {
 	&ssam_node_root,
 	&ssam_node_hub_kip,
 	&ssam_node_bat_ac,
 	&ssam_node_bat_main,
-	&ssam_node_tmp_pprof,
+	&ssam_node_tmp_perf_profile,
 	&ssam_node_kip_tablet_switch,
 	&ssam_node_hid_kip_keyboard,
 	&ssam_node_hid_kip_penstash,
 	&ssam_node_hid_kip_touchpad,
-	&ssam_node_hid_kip_iid5,
+	&ssam_node_hid_kip_fwupd,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_hid_sam_ucm_ucsi,
 	NULL,
 };
 
+/* Devices for Surface Pro 9, 10 and 11 (Intel/x86) */
+static const struct software_node *ssam_node_group_sp9[] = {
+	&ssam_node_root,
+	&ssam_node_hub_kip,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_perf_profile_with_fan,
+	&ssam_node_tmp_sensors,
+	&ssam_node_fan_speed,
+	&ssam_node_pos_tablet_switch,
+	&ssam_node_hid_kip_keyboard,
+	&ssam_node_hid_kip_penstash,
+	&ssam_node_hid_kip_touchpad,
+	&ssam_node_hid_kip_fwupd,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_hid_sam_ucm_ucsi,
+	NULL,
+};
+
+/* Devices for Surface Pro 9 5G (ARM/QCOM) */
+static const struct software_node *ssam_node_group_sp9_5g[] = {
+	&ssam_node_root,
+	&ssam_node_hub_kip,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_sensors,
+	&ssam_node_hid_kip_keyboard,
+	&ssam_node_hid_kip_penstash,
+	&ssam_node_hid_kip_touchpad,
+	&ssam_node_hid_kip_fwupd,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_kip_tablet_switch,
+	NULL,
+};
+
+/* Devices for Surface Pro 11 (ARM/QCOM) */
+static const struct software_node *ssam_node_group_sp11[] = {
+	&ssam_node_root,
+	&ssam_node_hub_kip,
+	&ssam_node_bat_ac,
+	&ssam_node_bat_main,
+	&ssam_node_tmp_sensors,
+	&ssam_node_hid_kip_keyboard,
+	&ssam_node_hid_kip_penstash,
+	&ssam_node_hid_kip_touchpad,
+	&ssam_node_hid_kip_fwupd,
+	&ssam_node_hid_sam_sensors,
+	&ssam_node_kip_tablet_switch,
+	NULL,
+};
 
 /* -- SSAM platform/meta-hub driver. ---------------------------------------- */
 
-static const struct acpi_device_id ssam_platform_hub_match[] = {
+static const struct acpi_device_id ssam_platform_hub_acpi_match[] = {
 	/* Surface Pro 4, 5, and 6 (OMBR < 0x10) */
 	{ "MSHW0081", (unsigned long)ssam_node_group_gen5 },
 
@@ -300,6 +439,15 @@ static const struct acpi_device_id ssam_platform_hub_match[] = {
 
 	/* Surface Pro 8 */
 	{ "MSHW0263", (unsigned long)ssam_node_group_sp8 },
+
+	/* Surface Pro 9 */
+	{ "MSHW0343", (unsigned long)ssam_node_group_sp9 },
+
+	/* Surface Pro 10 */
+	{ "MSHW0510", (unsigned long)ssam_node_group_sp9 },
+
+	/* Surface Pro 11 */
+	{ "MSHW0583", (unsigned long)ssam_node_group_sp9 },
 
 	/* Surface Book 2 */
 	{ "MSHW0107", (unsigned long)ssam_node_group_gen5 },
@@ -322,15 +470,41 @@ static const struct acpi_device_id ssam_platform_hub_match[] = {
 	/* Surface Laptop 4 (13", Intel) */
 	{ "MSHW0250", (unsigned long)ssam_node_group_sl3 },
 
+	/* Surface Laptop 5 */
+	{ "MSHW0350", (unsigned long)ssam_node_group_sl5 },
+
+	/* Surface Laptop 6 */
+	{ "MSHW0530", (unsigned long)ssam_node_group_sl6 },
+
 	/* Surface Laptop Go 1 */
 	{ "MSHW0118", (unsigned long)ssam_node_group_slg1 },
 
-	/* Surface Laptop Studio */
-	{ "MSHW0123", (unsigned long)ssam_node_group_sls },
+	/* Surface Laptop Go 2 */
+	{ "MSHW0290", (unsigned long)ssam_node_group_slg1 },
+
+	/* Surface Laptop Go 3 */
+	{ "MSHW0440", (unsigned long)ssam_node_group_slg1 },
+
+	/* Surface Laptop Studio 1 */
+	{ "MSHW0123", (unsigned long)ssam_node_group_sls1 },
+
+	/* Surface Laptop Studio 2 */
+	{ "MSHW0360", (unsigned long)ssam_node_group_sls2 },
 
 	{ },
 };
-MODULE_DEVICE_TABLE(acpi, ssam_platform_hub_match);
+MODULE_DEVICE_TABLE(acpi, ssam_platform_hub_acpi_match);
+
+static const struct of_device_id ssam_platform_hub_of_match[] __maybe_unused = {
+	/* Surface Pro 9 5G (ARM/QCOM) */
+	{ .compatible = "microsoft,arcata", (void *)ssam_node_group_sp9_5g },
+	/* Surface Pro 11 (ARM/QCOM) */
+	{ .compatible = "microsoft,denali", (void *)ssam_node_group_sp11 },
+	/* Surface Laptop 7 */
+	{ .compatible = "microsoft,romulus13", (void *)ssam_node_group_sl7 },
+	{ .compatible = "microsoft,romulus15", (void *)ssam_node_group_sl7 },
+	{ },
+};
 
 static int ssam_platform_hub_probe(struct platform_device *pdev)
 {
@@ -340,8 +514,11 @@ static int ssam_platform_hub_probe(struct platform_device *pdev)
 	int status;
 
 	nodes = (const struct software_node **)acpi_device_get_match_data(&pdev->dev);
-	if (!nodes)
-		return -ENODEV;
+	if (!nodes) {
+		nodes = (const struct software_node **)of_machine_get_match_data(ssam_platform_hub_of_match);
+		if (!nodes)
+			return -ENODEV;
+	}
 
 	/*
 	 * As we're adding the SSAM client devices as children under this device
@@ -376,14 +553,13 @@ static int ssam_platform_hub_probe(struct platform_device *pdev)
 	return status;
 }
 
-static int ssam_platform_hub_remove(struct platform_device *pdev)
+static void ssam_platform_hub_remove(struct platform_device *pdev)
 {
 	const struct software_node **nodes = platform_get_drvdata(pdev);
 
 	ssam_remove_clients(&pdev->dev);
 	set_secondary_fwnode(&pdev->dev, NULL);
 	software_node_unregister_node_group(nodes);
-	return 0;
 }
 
 static struct platform_driver ssam_platform_hub_driver = {
@@ -391,12 +567,13 @@ static struct platform_driver ssam_platform_hub_driver = {
 	.remove = ssam_platform_hub_remove,
 	.driver = {
 		.name = "surface_aggregator_platform_hub",
-		.acpi_match_table = ssam_platform_hub_match,
+		.acpi_match_table = ssam_platform_hub_acpi_match,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
 module_platform_driver(ssam_platform_hub_driver);
 
+MODULE_ALIAS("platform:surface_aggregator_platform_hub");
 MODULE_AUTHOR("Maximilian Luz <luzmaximilian@gmail.com>");
 MODULE_DESCRIPTION("Device-registry for Surface System Aggregator Module");
 MODULE_LICENSE("GPL");

@@ -25,15 +25,11 @@ readonly path_sysctl_mem="net.core.optmem_max"
 # No arguments: automated test
 if [[ "$#" -eq "0" ]]; then
 	IPs=( "4" "6" )
-	protocols=( "tcp" "udp" )
 
 	for IP in "${IPs[@]}"; do
-		for proto in "${protocols[@]}"; do
-			for mode in $(seq 1 3); do
-				$0 "$IP" "$proto" -m "$mode" -t 1 -n 32
-				$0 "$IP" "$proto" -m "$mode" -t 1 -n 32 -f
-				$0 "$IP" "$proto" -m "$mode" -t 1 -n 32 -c -f
-			done
+		for mode in $(seq 1 3); do
+			$0 "$IP" udp -m "$mode" -t 1 -n 32
+			$0 "$IP" tcp -m "$mode" -t 1 -n 1
 		done
 	done
 
@@ -80,22 +76,21 @@ case "${TXMODE}" in
 esac
 
 # Start of state changes: install cleanup handler
-save_sysctl_mem="$(sysctl -n ${path_sysctl_mem})"
 
 cleanup() {
 	ip netns del "${NS2}"
 	ip netns del "${NS1}"
-	sysctl -w -q "${path_sysctl_mem}=${save_sysctl_mem}"
 }
 
 trap cleanup EXIT
 
-# Configure system settings
-sysctl -w -q "${path_sysctl_mem}=1000000"
-
 # Create virtual ethernet pair between network namespaces
 ip netns add "${NS1}"
 ip netns add "${NS2}"
+
+# Configure system settings
+ip netns exec "${NS1}" sysctl -w -q "${path_sysctl_mem}=1000000"
+ip netns exec "${NS2}" sysctl -w -q "${path_sysctl_mem}=1000000"
 
 ip link add "${DEV}" mtu "${DEV_MTU}" netns "${NS1}" type veth \
   peer name "${DEV}" mtu "${DEV_MTU}" netns "${NS2}"

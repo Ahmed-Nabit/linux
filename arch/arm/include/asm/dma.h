@@ -12,6 +12,9 @@
 	extern phys_addr_t arm_dma_zone_size; \
 	arm_dma_zone_size && arm_dma_zone_size < (0x100000000ULL - PAGE_OFFSET) ? \
 		(PAGE_OFFSET + arm_dma_zone_size) : 0xffffffffUL; })
+
+extern phys_addr_t arm_dma_limit;
+#define ARCH_LOW_ADDRESS_LIMIT arm_dma_limit
 #endif
 
 #ifdef CONFIG_ISA_DMA_API
@@ -106,7 +109,7 @@ extern void set_dma_sg(unsigned int chan, struct scatterlist *sg, int nr_sg);
  */
 extern void __set_dma_addr(unsigned int chan, void *addr);
 #define set_dma_addr(chan, addr)				\
-	__set_dma_addr(chan, (void *)__bus_to_virt(addr))
+	__set_dma_addr(chan, (void *)isa_bus_to_virt(addr))
 
 /* Set the DMA byte count for this channel
  *

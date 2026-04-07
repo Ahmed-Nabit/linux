@@ -36,16 +36,17 @@ properties:
     maxItems: 2
     items:
       enum:
-        - "INT1"
-        - "INT2"
-
-  spi-max-frequency: true
+        - INT1
+        - INT2
 
 required:
   - compatible
   - reg
 
-additionalProperties: false
+allOf:
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+
+unevaluatedProperties: false
 
 examples:
   - |

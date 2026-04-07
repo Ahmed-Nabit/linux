@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * drivers/input/tablet/wacom.h
- *
  *  USB Wacom tablet support
  *
  *  Copyright (c) 2000-2004 Vojtech Pavlik	<vojtech@ucw.cz>
@@ -78,10 +76,9 @@
  *                 - integration of the Bluetooth devices
  */
 
-/*
- */
 #ifndef WACOM_H
 #define WACOM_H
+
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -92,7 +89,7 @@
 #include <linux/usb/input.h>
 #include <linux/power_supply.h>
 #include <linux/timer.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 /*
  * Version Information
@@ -153,6 +150,7 @@ struct wacom_remote {
 		struct input_dev *input;
 		bool registered;
 		struct wacom_battery battery;
+		ktime_t active_time;
 	} remotes[WACOM_MAX_REMOTES];
 };
 
@@ -166,6 +164,7 @@ struct wacom {
 	struct work_struct battery_work;
 	struct work_struct remote_work;
 	struct delayed_work init_work;
+	struct delayed_work aes_battery_work;
 	struct wacom_remote *remote;
 	struct work_struct mode_change_work;
 	struct timer_list idleprox_timer;
@@ -217,6 +216,14 @@ static inline __u32 wacom_s32tou(s32 value, __u8 n)
 	case 32: return ((__u32)value);
 	}
 	return value & (1 << (n - 1)) ? value & (~(~0U << n)) : value;
+}
+
+static inline u32 wacom_rescale(u32 value, u32 in_max, u32 out_max)
+{
+	if (in_max == 0 || out_max == 0)
+		return 0;
+	value = clamp(value, 0, in_max);
+	return DIV_ROUND_CLOSEST(value * out_max, in_max);
 }
 
 extern const struct hid_device_id wacom_ids[];

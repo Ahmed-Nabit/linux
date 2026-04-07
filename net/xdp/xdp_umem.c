@@ -19,8 +19,6 @@
 #include "xdp_umem.h"
 #include "xsk_queue.h"
 
-#define XDP_UMEM_MIN_CHUNK_SIZE 2048
-
 static DEFINE_IDA(umem_ida);
 
 static void xdp_umem_unpin_pages(struct xdp_umem *umem)
@@ -99,13 +97,14 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 	long npgs;
 	int err;
 
-	umem->pgs = kvcalloc(umem->npgs, sizeof(*umem->pgs), GFP_KERNEL | __GFP_NOWARN);
+	umem->pgs = kvzalloc_objs(*umem->pgs, umem->npgs,
+				  GFP_KERNEL | __GFP_NOWARN);
 	if (!umem->pgs)
 		return -ENOMEM;
 
 	mmap_read_lock(current->mm);
 	npgs = pin_user_pages(address, umem->npgs,
-			      gup_flags | FOLL_LONGTERM, &umem->pgs[0], NULL);
+			      gup_flags | FOLL_LONGTERM, &umem->pgs[0]);
 	mmap_read_unlock(current->mm);
 
 	if (npgs != umem->npgs) {
@@ -150,12 +149,19 @@ static int xdp_umem_account_pages(struct xdp_umem *umem)
 	return 0;
 }
 
+#define XDP_UMEM_FLAGS_VALID ( \
+		XDP_UMEM_UNALIGNED_CHUNK_FLAG | \
+		XDP_UMEM_TX_SW_CSUM | \
+		XDP_UMEM_TX_METADATA_LEN | \
+	0)
+
 static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 {
-	u32 npgs_rem, chunk_size = mr->chunk_size, headroom = mr->headroom;
 	bool unaligned_chunks = mr->flags & XDP_UMEM_UNALIGNED_CHUNK_FLAG;
-	u64 npgs, addr = mr->addr, size = mr->len;
-	unsigned int chunks, chunks_rem;
+	u32 chunk_size = mr->chunk_size, headroom = mr->headroom;
+	u64 addr = mr->addr, size = mr->len;
+	u32 chunks_rem, npgs_rem;
+	u64 chunks, npgs;
 	int err;
 
 	if (chunk_size < XDP_UMEM_MIN_CHUNK_SIZE || chunk_size > PAGE_SIZE) {
@@ -168,7 +174,7 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 		return -EINVAL;
 	}
 
-	if (mr->flags & ~XDP_UMEM_UNALIGNED_CHUNK_FLAG)
+	if (mr->flags & ~XDP_UMEM_FLAGS_VALID)
 		return -EINVAL;
 
 	if (!unaligned_chunks && !is_power_of_2(chunk_size))
@@ -190,8 +196,8 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 	if (npgs > U32_MAX)
 		return -EINVAL;
 
-	chunks = (unsigned int)div_u64_rem(size, chunk_size, &chunks_rem);
-	if (chunks == 0)
+	chunks = div_u64_rem(size, chunk_size, &chunks_rem);
+	if (!chunks || chunks > U32_MAX)
 		return -EINVAL;
 
 	if (!unaligned_chunks && chunks_rem)
@@ -200,11 +206,17 @@ static int xdp_umem_reg(struct xdp_umem *umem, struct xdp_umem_reg *mr)
 	if (headroom >= chunk_size - XDP_PACKET_HEADROOM)
 		return -EINVAL;
 
+	if (mr->flags & XDP_UMEM_TX_METADATA_LEN) {
+		if (mr->tx_metadata_len >= 256 || mr->tx_metadata_len % 8)
+			return -EINVAL;
+		umem->tx_metadata_len = mr->tx_metadata_len;
+	}
+
 	umem->size = size;
 	umem->headroom = headroom;
 	umem->chunk_size = chunk_size;
 	umem->chunks = chunks;
-	umem->npgs = (u32)npgs;
+	umem->npgs = npgs;
 	umem->pgs = NULL;
 	umem->user = NULL;
 	umem->flags = mr->flags;
@@ -238,7 +250,7 @@ struct xdp_umem *xdp_umem_create(struct xdp_umem_reg *mr)
 	struct xdp_umem *umem;
 	int err;
 
-	umem = kzalloc(sizeof(*umem), GFP_KERNEL);
+	umem = kzalloc_obj(*umem);
 	if (!umem)
 		return ERR_PTR(-ENOMEM);
 

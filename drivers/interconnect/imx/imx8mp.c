@@ -7,7 +7,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <dt-bindings/interconnect/fsl,imx8mp.h>
 
@@ -240,14 +239,9 @@ static int imx8mp_icc_probe(struct platform_device *pdev)
 	return imx_icc_register(pdev, nodes, ARRAY_SIZE(nodes), noc_setting_nodes);
 }
 
-static int imx8mp_icc_remove(struct platform_device *pdev)
-{
-	return imx_icc_unregister(pdev);
-}
-
 static struct platform_driver imx8mp_icc_driver = {
 	.probe = imx8mp_icc_probe,
-	.remove = imx8mp_icc_remove,
+	.remove = imx_icc_unregister,
 	.driver = {
 		.name = "imx8mp-interconnect",
 	},
@@ -255,5 +249,6 @@ static struct platform_driver imx8mp_icc_driver = {
 
 module_platform_driver(imx8mp_icc_driver);
 MODULE_AUTHOR("Peng Fan <peng.fan@nxp.com>");
+MODULE_DESCRIPTION("Interconnect framework driver for i.MX8MP SoC");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:imx8mp-interconnect");

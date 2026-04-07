@@ -7,8 +7,7 @@
  * Copyright IBM Corp. 2008, 2017
  */
 
-#define KMSG_COMPONENT "zfcp"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define pr_fmt(fmt) "zfcp: " fmt
 
 #include <linux/types.h>
 #include <linux/slab.h>
@@ -48,7 +47,7 @@ unsigned int zfcp_fc_port_scan_backoff(void)
 {
 	if (!port_scan_backoff)
 		return 0;
-	return prandom_u32_max(port_scan_backoff);
+	return get_random_u32_below(port_scan_backoff);
 }
 
 static void zfcp_fc_port_scan_time(struct zfcp_adapter *adapter)
@@ -129,7 +128,7 @@ void zfcp_fc_enqueue_event(struct zfcp_adapter *adapter,
 {
 	struct zfcp_fc_event *event;
 
-	event = kmalloc(sizeof(struct zfcp_fc_event), GFP_ATOMIC);
+	event = kmalloc_obj(struct zfcp_fc_event, GFP_ATOMIC);
 	if (!event)
 		return;
 
@@ -534,10 +533,14 @@ static void zfcp_fc_adisc_handler(void *data)
 
 	/* re-init to undo drop from zfcp_fc_adisc() */
 	port->d_id = ntoh24(adisc_resp->adisc_port_id);
-	/* port is good, unblock rport without going through erp */
-	zfcp_scsi_schedule_rport_register(port);
+	/* port is still good, nothing to do */
  out:
 	atomic_andnot(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
+	/*
+	 * port ref comes from get_device() in zfcp_fc_test_link() and
+	 * work item zfcp_fc_link_test_work() passes ref via
+	 * zfcp_fc_adisc() to here, if zfcp_fc_adisc() could send ADISC
+	 */
 	put_device(&port->dev);
 	kmem_cache_free(zfcp_fc_req_cache, fc_req);
 }
@@ -595,9 +598,6 @@ void zfcp_fc_link_test_work(struct work_struct *work)
 	int retval;
 
 	set_worker_desc("zadisc%16llx", port->wwpn); /* < WORKER_DESC_LEN=24 */
-	get_device(&port->dev);
-	port->rport_task = RPORT_DEL;
-	zfcp_scsi_rport_work(&port->rport_work);
 
 	/* only issue one test command at one time per port */
 	if (atomic_read(&port->status) & ZFCP_STATUS_PORT_LINK_TEST)
@@ -607,7 +607,7 @@ void zfcp_fc_link_test_work(struct work_struct *work)
 
 	retval = zfcp_fc_adisc(port);
 	if (retval == 0)
-		return;
+		return; /* port ref passed to zfcp_fc_adisc(), no put here */
 
 	/* send of ADISC was not possible */
 	atomic_andnot(ZFCP_STATUS_PORT_LINK_TEST, &port->status);
@@ -885,7 +885,7 @@ static int zfcp_fc_gspn(struct zfcp_adapter *adapter,
 			 dev_name(&adapter->ccw_device->dev),
 			 init_utsname()->nodename);
 	else
-		strlcpy(fc_host_symbolic_name(adapter->scsi_host),
+		strscpy(fc_host_symbolic_name(adapter->scsi_host),
 			gspn_rsp->gspn.fp_name, FC_SYMBOLIC_NAME_SIZE);
 
 	return 0;
@@ -904,8 +904,19 @@ static void zfcp_fc_rspn(struct zfcp_adapter *adapter,
 	zfcp_fc_ct_ns_init(&rspn_req->ct_hdr, FC_NS_RSPN_ID,
 			   FC_SYMBOLIC_NAME_SIZE);
 	hton24(rspn_req->rspn.fr_fid.fp_fid, fc_host_port_id(shost));
-	len = strlcpy(rspn_req->rspn.fr_name, fc_host_symbolic_name(shost),
-		      FC_SYMBOLIC_NAME_SIZE);
+
+	BUILD_BUG_ON(sizeof(rspn_req->name) !=
+			sizeof(fc_host_symbolic_name(shost)));
+	BUILD_BUG_ON(sizeof(rspn_req->name) !=
+			type_max(typeof(rspn_req->rspn.fr_name_len)) + 1);
+	len = strscpy(rspn_req->name, fc_host_symbolic_name(shost),
+		      sizeof(rspn_req->name));
+	/*
+	 * It should be impossible for this to truncate (see BUILD_BUG_ON()
+	 * above), but be robust anyway.
+	 */
+	if (WARN_ON(len < 0))
+		len = sizeof(rspn_req->name) - 1;
 	rspn_req->rspn.fr_name_len = len;
 
 	sg_init_one(&fc_req->sg_req, rspn_req, sizeof(*rspn_req));
@@ -1105,7 +1116,7 @@ int zfcp_fc_gs_setup(struct zfcp_adapter *adapter)
 {
 	struct zfcp_fc_wka_ports *wka_ports;
 
-	wka_ports = kzalloc(sizeof(struct zfcp_fc_wka_ports), GFP_KERNEL);
+	wka_ports = kzalloc_obj(struct zfcp_fc_wka_ports);
 	if (!wka_ports)
 		return -ENOMEM;
 

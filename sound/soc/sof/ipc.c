@@ -3,7 +3,7 @@
 // This file is provided under a dual BSD/GPLv2 license.  When using or
 // redistributing this file, you may do so under either license.
 //
-// Copyright(c) 2018 Intel Corporation. All rights reserved.
+// Copyright(c) 2018 Intel Corporation
 //
 // Author: Liam Girdwood <liam.r.girdwood@linux.intel.com>
 //
@@ -47,7 +47,7 @@ int sof_ipc_send_msg(struct snd_sof_dev *sdev, void *msg_data, size_t msg_bytes,
 	 * The spin-lock is needed to protect message objects against other
 	 * atomic contexts.
 	 */
-	spin_lock_irq(&sdev->ipc_lock);
+	guard(spinlock_irq)(&sdev->ipc_lock);
 
 	/* initialise the message */
 	msg = &ipc->msg;
@@ -66,8 +66,6 @@ int sof_ipc_send_msg(struct snd_sof_dev *sdev, void *msg_data, size_t msg_bytes,
 	if (!ret)
 		msg->ipc_complete = false;
 
-	spin_unlock_irq(&sdev->ipc_lock);
-
 	return ret;
 }
 
@@ -83,6 +81,14 @@ int sof_ipc_tx_message(struct snd_sof_ipc *ipc, void *msg_data, size_t msg_bytes
 				reply_bytes, false);
 }
 EXPORT_SYMBOL(sof_ipc_tx_message);
+
+/* IPC set or get data from host to DSP */
+int sof_ipc_set_get_data(struct snd_sof_ipc *ipc, void *msg_data,
+			 size_t msg_bytes, bool set)
+{
+	return ipc->ops->set_get_data(ipc->sdev, msg_data, msg_bytes, set);
+}
+EXPORT_SYMBOL(sof_ipc_set_get_data);
 
 /*
  * send IPC message from host to DSP without modifying the DSP state.
@@ -157,12 +163,12 @@ struct snd_sof_ipc *snd_sof_ipc_init(struct snd_sof_dev *sdev)
 
 	switch (sdev->pdata->ipc_type) {
 #if defined(CONFIG_SND_SOC_SOF_IPC3)
-	case SOF_IPC:
+	case SOF_IPC_TYPE_3:
 		ops = &ipc3_ops;
 		break;
 #endif
-#if defined(CONFIG_SND_SOC_SOF_INTEL_IPC4)
-	case SOF_INTEL_IPC4:
+#if defined(CONFIG_SND_SOC_SOF_IPC4)
+	case SOF_IPC_TYPE_4:
 		ops = &ipc4_ops;
 		break;
 #endif
@@ -200,6 +206,9 @@ struct snd_sof_ipc *snd_sof_ipc_init(struct snd_sof_dev *sdev)
 		return NULL;
 	}
 
+	if (ops->init && ops->init(sdev))
+		return NULL;
+
 	ipc->ops = ops;
 
 	return ipc;
@@ -214,8 +223,10 @@ void snd_sof_ipc_free(struct snd_sof_dev *sdev)
 		return;
 
 	/* disable sending of ipc's */
-	mutex_lock(&ipc->tx_mutex);
-	ipc->disable_ipc_tx = true;
-	mutex_unlock(&ipc->tx_mutex);
+	scoped_guard(mutex, &ipc->tx_mutex)
+		ipc->disable_ipc_tx = true;
+
+	if (ipc->ops->exit)
+		ipc->ops->exit(sdev);
 }
 EXPORT_SYMBOL(snd_sof_ipc_free);

@@ -11,7 +11,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/regulator/consumer.h>
 
 #include <drm/drm_connector.h>
@@ -511,9 +511,10 @@ static int dsicm_probe(struct mipi_dsi_device *dsi)
 
 	dev_dbg(dev, "probe\n");
 
-	ddata = devm_kzalloc(dev, sizeof(*ddata), GFP_KERNEL);
-	if (!ddata)
-		return -ENOMEM;
+	ddata = devm_drm_panel_alloc(dev, struct panel_drv_data, panel,
+				     &dsicm_panel_funcs, DRM_MODE_CONNECTOR_DSI);
+	if (IS_ERR(ddata))
+		return PTR_ERR(ddata);
 
 	mipi_dsi_set_drvdata(dsi, ddata);
 	ddata->dsi = dsi;
@@ -529,9 +530,6 @@ static int dsicm_probe(struct mipi_dsi_device *dsi)
 	mutex_init(&ddata->lock);
 
 	dsicm_hw_reset(ddata);
-
-	drm_panel_init(&ddata->panel, dev, &dsicm_panel_funcs,
-		       DRM_MODE_CONNECTOR_DSI);
 
 	if (ddata->use_dsi_backlight) {
 		struct backlight_properties props = { 0 };
@@ -579,7 +577,7 @@ err_bl:
 	return r;
 }
 
-static int dsicm_remove(struct mipi_dsi_device *dsi)
+static void dsicm_remove(struct mipi_dsi_device *dsi)
 {
 	struct panel_drv_data *ddata = mipi_dsi_get_drvdata(dsi);
 
@@ -593,8 +591,6 @@ static int dsicm_remove(struct mipi_dsi_device *dsi)
 
 	if (ddata->extbldev)
 		put_device(&ddata->extbldev->dev);
-
-	return 0;
 }
 
 static const struct dsic_panel_data taal_data = {

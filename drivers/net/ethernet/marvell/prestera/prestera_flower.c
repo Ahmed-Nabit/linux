@@ -5,6 +5,7 @@
 #include "prestera_acl.h"
 #include "prestera_flow.h"
 #include "prestera_flower.h"
+#include "prestera_matchall.h"
 
 struct prestera_flower_template {
 	struct prestera_acl_ruleset *ruleset;
@@ -147,6 +148,12 @@ static int prestera_flower_parse_meta(struct prestera_acl_rule *rule,
 	__be16 key, mask;
 
 	flow_rule_match_meta(f_rule, &match);
+
+	if (match.mask->l2_miss) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't match on \"l2_miss\"");
+		return -EOPNOTSUPP;
+	}
+
 	if (match.mask->ingress_ifindex != 0xFFFFFFFF) {
 		NL_SET_ERR_MSG_MOD(f->common.extack,
 				   "Unsupported ingress ifindex mask");
@@ -195,16 +202,16 @@ static int prestera_flower_parse(struct prestera_flow_block *block,
 	int err;
 
 	if (dissector->used_keys &
-	    ~(BIT(FLOW_DISSECTOR_KEY_META) |
-	      BIT(FLOW_DISSECTOR_KEY_CONTROL) |
-	      BIT(FLOW_DISSECTOR_KEY_BASIC) |
-	      BIT(FLOW_DISSECTOR_KEY_ETH_ADDRS) |
-	      BIT(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
-	      BIT(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
-	      BIT(FLOW_DISSECTOR_KEY_ICMP) |
-	      BIT(FLOW_DISSECTOR_KEY_PORTS) |
-	      BIT(FLOW_DISSECTOR_KEY_PORTS_RANGE) |
-	      BIT(FLOW_DISSECTOR_KEY_VLAN))) {
+	    ~(BIT_ULL(FLOW_DISSECTOR_KEY_META) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_BASIC) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_ETH_ADDRS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS_RANGE) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN))) {
 		NL_SET_ERR_MSG_MOD(f->common.extack, "Unsupported key");
 		return -EOPNOTSUPP;
 	}
@@ -222,6 +229,10 @@ static int prestera_flower_parse(struct prestera_flow_block *block,
 
 		flow_rule_match_control(f_rule, &match);
 		addr_type = match.key->addr_type;
+
+		if (flow_rule_has_control_flags(match.mask->flags,
+						f->common.extack))
+			return -EOPNOTSUPP;
 	}
 
 	if (flow_rule_match_key(f_rule, FLOW_DISSECTOR_KEY_BASIC)) {
@@ -360,6 +371,49 @@ static int prestera_flower_parse(struct prestera_flow_block *block,
 					     f->common.extack);
 }
 
+static int prestera_flower_prio_check(struct prestera_flow_block *block,
+				      struct flow_cls_offload *f)
+{
+	u32 mall_prio_min;
+	u32 mall_prio_max;
+	int err;
+
+	err = prestera_mall_prio_get(block, &mall_prio_min, &mall_prio_max);
+	if (err == -ENOENT)
+		/* No matchall filters installed on this chain. */
+		return 0;
+
+	if (err) {
+		NL_SET_ERR_MSG(f->common.extack, "Failed to get matchall priorities");
+		return err;
+	}
+
+	if (f->common.prio <= mall_prio_max && block->ingress) {
+		NL_SET_ERR_MSG(f->common.extack,
+			       "Failed to add in front of existing matchall rules");
+		return -EOPNOTSUPP;
+	}
+	if (f->common.prio >= mall_prio_min && !block->ingress) {
+		NL_SET_ERR_MSG(f->common.extack, "Failed to add behind of existing matchall rules");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+int prestera_flower_prio_get(struct prestera_flow_block *block, u32 chain_index,
+			     u32 *prio_min, u32 *prio_max)
+{
+	struct prestera_acl_ruleset *ruleset;
+
+	ruleset = prestera_acl_ruleset_lookup(block->sw->acl, block, chain_index);
+	if (IS_ERR(ruleset))
+		return PTR_ERR(ruleset);
+
+	prestera_acl_ruleset_prio_get(ruleset, prio_min, prio_max);
+	return 0;
+}
+
 int prestera_flower_replace(struct prestera_flow_block *block,
 			    struct flow_cls_offload *f)
 {
@@ -367,6 +421,10 @@ int prestera_flower_replace(struct prestera_flow_block *block,
 	struct prestera_acl *acl = block->sw->acl;
 	struct prestera_acl_rule *rule;
 	int err;
+
+	err = prestera_flower_prio_check(block, f);
+	if (err)
+		return err;
 
 	ruleset = prestera_acl_ruleset_get(acl, block, f->common.chain_index);
 	if (IS_ERR(ruleset))
@@ -437,7 +495,7 @@ int prestera_flower_tmplt_create(struct prestera_flow_block *block,
 	if (err)
 		return err;
 
-	template = kmalloc(sizeof(*template), GFP_KERNEL);
+	template = kmalloc_obj(*template);
 	if (!template) {
 		err = -ENOMEM;
 		goto err_malloc;
@@ -452,7 +510,9 @@ int prestera_flower_tmplt_create(struct prestera_flow_block *block,
 	}
 
 	/* preserve keymask/template to this ruleset */
-	prestera_acl_ruleset_keymask_set(ruleset, rule.re_key.match.mask);
+	err = prestera_acl_ruleset_keymask_set(ruleset, rule.re_key.match.mask);
+	if (err)
+		goto err_ruleset_keymask_set;
 
 	/* skip error, as it is not possible to reject template operation,
 	 * so, keep the reference to the ruleset for rules to be added
@@ -468,6 +528,8 @@ int prestera_flower_tmplt_create(struct prestera_flow_block *block,
 	list_add_rcu(&template->list, &block->template_list);
 	return 0;
 
+err_ruleset_keymask_set:
+	prestera_acl_ruleset_put(ruleset);
 err_ruleset_get:
 	kfree(template);
 err_malloc:

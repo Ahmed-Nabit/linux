@@ -117,10 +117,8 @@ static int srf04_read(struct srf04_data *data)
 	udelay(data->cfg->trigger_pulse_us);
 	gpiod_set_value(data->gpiod_trig, 0);
 
-	if (data->gpiod_power) {
-		pm_runtime_mark_last_busy(data->dev);
+	if (data->gpiod_power)
 		pm_runtime_put_autosuspend(data->dev);
-	}
 
 	/* it should not take more than 20 ms until echo is rising */
 	ret = wait_for_completion_killable_timeout(&data->rising, HZ/50);
@@ -240,7 +238,7 @@ static const struct of_device_id of_srf04_match[] = {
 	{ .compatible = "maxbotix,mb1020", .data = &mb_lv_cfg },
 	{ .compatible = "maxbotix,mb1030", .data = &mb_lv_cfg },
 	{ .compatible = "maxbotix,mb1040", .data = &mb_lv_cfg },
-	{},
+	{ }
 };
 
 MODULE_DEVICE_TABLE(of, of_srf04_match);
@@ -253,10 +251,8 @@ static int srf04_probe(struct platform_device *pdev)
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(struct srf04_data));
-	if (!indio_dev) {
-		dev_err(dev, "failed to allocate IIO device\n");
+	if (!indio_dev)
 		return -ENOMEM;
-	}
 
 	data = iio_priv(indio_dev);
 	data->dev = dev;
@@ -344,7 +340,7 @@ static int srf04_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int srf04_remove(struct platform_device *pdev)
+static void srf04_remove(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct srf04_data *data = iio_priv(indio_dev);
@@ -355,11 +351,9 @@ static int srf04_remove(struct platform_device *pdev)
 		pm_runtime_disable(data->dev);
 		pm_runtime_set_suspended(data->dev);
 	}
-
-	return 0;
 }
 
-static int __maybe_unused srf04_pm_runtime_suspend(struct device *dev)
+static int  srf04_pm_runtime_suspend(struct device *dev)
 {
 	struct platform_device *pdev = container_of(dev,
 						struct platform_device, dev);
@@ -371,7 +365,7 @@ static int __maybe_unused srf04_pm_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused srf04_pm_runtime_resume(struct device *dev)
+static int srf04_pm_runtime_resume(struct device *dev)
 {
 	struct platform_device *pdev = container_of(dev,
 						struct platform_device, dev);
@@ -385,8 +379,8 @@ static int __maybe_unused srf04_pm_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops srf04_pm_ops = {
-	SET_RUNTIME_PM_OPS(srf04_pm_runtime_suspend,
-				srf04_pm_runtime_resume, NULL)
+	RUNTIME_PM_OPS(srf04_pm_runtime_suspend,
+		       srf04_pm_runtime_resume, NULL)
 };
 
 static struct platform_driver srf04_driver = {
@@ -395,7 +389,7 @@ static struct platform_driver srf04_driver = {
 	.driver		= {
 		.name		= "srf04-gpio",
 		.of_match_table	= of_srf04_match,
-		.pm		= &srf04_pm_ops,
+		.pm		= pm_ptr(&srf04_pm_ops),
 	},
 };
 

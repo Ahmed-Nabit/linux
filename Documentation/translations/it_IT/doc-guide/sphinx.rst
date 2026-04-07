@@ -109,7 +109,7 @@ Sphinx. Se lo script riesce a riconoscere la vostra distribuzione, allora
 sarà in grado di darvi dei suggerimenti su come procedere per completare
 l'installazione::
 
-	$ ./scripts/sphinx-pre-install
+	$ ./tools/docs/sphinx-pre-install
 	Checking if the needed tools for Fedora release 26 (Twenty Six) are available
 	Warning: better to also install "texlive-luatex85".
 	You should run:
@@ -119,7 +119,7 @@ l'installazione::
 		. sphinx_2.4.4/bin/activate
 		pip install -r Documentation/sphinx/requirements.txt
 
-	Can't build as 1 mandatory dependency is missing at ./scripts/sphinx-pre-install line 468.
+	Can't build as 1 mandatory dependency is missing at ./tools/docs/sphinx-pre-install line 468.
 
 L'impostazione predefinita prevede il controllo dei requisiti per la generazione
 di documenti html e PDF, includendo anche il supporto per le immagini, le
@@ -151,7 +151,8 @@ Ovviamente, per generare la documentazione, Sphinx (``sphinx-build``)
 dev'essere installato. Se disponibile, il tema *Read the Docs* per Sphinx
 verrà utilizzato per ottenere una documentazione HTML più gradevole.
 Per la documentazione in formato PDF, invece, avrete bisogno di ``XeLaTeX`
-e di ``convert(1)`` disponibile in ImageMagick (https://www.imagemagick.org).
+e di ``convert(1)`` disponibile in ImageMagick
+(https://www.imagemagick.org). \ [#ink]_
 Tipicamente, tutti questi pacchetti sono disponibili e pacchettizzati nelle
 distribuzioni Linux.
 
@@ -162,8 +163,19 @@ la generazione potete usare il seguente comando ``make SPHINXOPTS=-v htmldocs``.
 Potete anche personalizzare l'ouptut html passando un livello aggiuntivo
 DOCS_CSS usando la rispettiva variabile d'ambiente ``DOCS_CSS``.
 
+La variable make ``SPHINXDIRS`` è utile quando si vuole generare solo una parte
+della documentazione. Per esempio, si possono generare solo di documenti in
+``Documentation/doc-guide`` eseguendo ``make SPHINXDIRS=doc-guide htmldocs``. La
+sezione dedicata alla documentazione di ``make help`` vi mostrerà quali sotto
+cartelle potete specificare.
+
 Potete eliminare la documentazione generata tramite il comando
 ``make cleandocs``.
+
+.. [#ink] Avere installato anche ``inkscape(1)`` dal progetto Inkscape ()
+          potrebbe aumentare la qualità delle immagini che verranno integrate
+          nel documento PDF, specialmente per quando si usando rilasci del
+          kernel uguali o superiori a 5.18
 
 Scrivere la documentazione
 ==========================

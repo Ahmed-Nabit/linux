@@ -11,7 +11,7 @@
  * Copyright (C) 2019-2022 Maximilian Luz <luzmaximilian@gmail.com>
  */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/acpi.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
@@ -355,7 +355,8 @@ static u32 san_evt_bat_nf(struct ssam_event_notifier *nf,
 	INIT_DELAYED_WORK(&work->work, san_evt_bat_workfn);
 	work->dev = d->dev;
 
-	memcpy(&work->event, event, sizeof(struct ssam_event) + event->length);
+	work->event = *event;
+	memcpy(work->event.data, event->data, event->length);
 
 	queue_delayed_work(san_wq, &work->work, delay);
 	return SSAM_NOTIF_HANDLED;
@@ -589,7 +590,7 @@ static acpi_status san_rqst(struct san_data *d, struct gsb_buffer *buffer)
 		return san_rqst_fixup_suspended(d, &rqst, buffer);
 	}
 
-	status = __ssam_retry(ssam_request_sync_onstack, SAN_REQUEST_NUM_TRIES,
+	status = __ssam_retry(ssam_request_do_sync_onstack, SAN_REQUEST_NUM_TRIES,
 			      d->ctrl, &rqst, &rsp, SAN_GSB_MAX_RQSX_PAYLOAD);
 
 	if (!status) {
@@ -735,30 +736,6 @@ do {										\
 #define san_consumer_warn(dev, handle, fmt, ...) \
 	san_consumer_printk(warn, dev, handle, fmt, ##__VA_ARGS__)
 
-static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
-{
-	struct acpi_handle_list dep_devices;
-	acpi_handle supplier = ACPI_HANDLE(&pdev->dev);
-	acpi_status status;
-	int i;
-
-	if (!acpi_has_method(handle, "_DEP"))
-		return false;
-
-	status = acpi_evaluate_reference(handle, "_DEP", NULL, &dep_devices);
-	if (ACPI_FAILURE(status)) {
-		san_consumer_dbg(&pdev->dev, handle, "failed to evaluate _DEP\n");
-		return false;
-	}
-
-	for (i = 0; i < dep_devices.count; i++) {
-		if (dep_devices.handles[i] == supplier)
-			return true;
-	}
-
-	return false;
-}
-
 static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
 				      void *context, void **rv)
 {
@@ -767,7 +744,7 @@ static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
 	struct acpi_device *adev;
 	struct device_link *link;
 
-	if (!is_san_consumer(pdev, handle))
+	if (!acpi_device_dep(handle, ACPI_HANDLE(&pdev->dev)))
 		return AE_OK;
 
 	/* Ignore ACPI devices that are not present. */
@@ -849,7 +826,7 @@ err_enable_events:
 	return status;
 }
 
-static int san_remove(struct platform_device *pdev)
+static void san_remove(struct platform_device *pdev)
 {
 	acpi_handle san = ACPI_HANDLE(&pdev->dev);
 
@@ -863,8 +840,6 @@ static int san_remove(struct platform_device *pdev)
 	 * all delayed works they may have spawned are run to completion.
 	 */
 	flush_workqueue(san_wq);
-
-	return 0;
 }
 
 static const struct acpi_device_id san_match[] = {
@@ -887,7 +862,7 @@ static int __init san_init(void)
 {
 	int ret;
 
-	san_wq = alloc_workqueue("san_wq", 0, 0);
+	san_wq = alloc_workqueue("san_wq", WQ_PERCPU, 0);
 	if (!san_wq)
 		return -ENOMEM;
 	ret = platform_driver_register(&surface_acpi_notify);

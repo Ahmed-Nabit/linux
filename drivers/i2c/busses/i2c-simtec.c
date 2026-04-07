@@ -64,7 +64,7 @@ static int simtec_i2c_probe(struct platform_device *dev)
 	int size;
 	int ret;
 
-	pd = kzalloc(sizeof(struct simtec_i2c_data), GFP_KERNEL);
+	pd = kzalloc_obj(struct simtec_i2c_data);
 	if (pd == NULL)
 		return -ENOMEM;
 
@@ -126,7 +126,7 @@ static int simtec_i2c_probe(struct platform_device *dev)
 	return ret;
 }
 
-static int simtec_i2c_remove(struct platform_device *dev)
+static void simtec_i2c_remove(struct platform_device *dev)
 {
 	struct simtec_i2c_data *pd = platform_get_drvdata(dev);
 
@@ -135,8 +135,6 @@ static int simtec_i2c_remove(struct platform_device *dev)
 	iounmap(pd->reg);
 	release_mem_region(pd->ioarea->start, resource_size(pd->ioarea));
 	kfree(pd);
-
-	return 0;
 }
 
 /* device driver */

@@ -47,10 +47,8 @@
 	firmware-name = "qcom/sdm845/judyln/cdsp.mbn";
 };
 
-&gpu {
-	zap-shader {
-		firmware-name = "qcom/sdm845/judyln/a630_zap.mbn";
-	};
+&gpu_zap_shader {
+	firmware-name = "qcom/sdm845/judyln/a630_zap.mbn";
 };
 
 &mss_pil {
@@ -58,7 +56,7 @@
 };
 
 &tlmm {
-	thinq_key_default: thinq-key-default {
+	thinq_key_default: thinq-key-default-state {
 		pins = "gpio89";
 		function = "gpio";
 

@@ -12,6 +12,9 @@
 #include <linux/i2c.h>
 #include <linux/pm_runtime.h>
 
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_modeset_helper_vtables.h>
+#include <drm/drm_print.h>
 #include <drm/drm_simple_kms_helper.h>
 
 #include "cdv_device.h"
@@ -151,7 +154,7 @@ static void cdv_intel_lvds_restore(struct drm_connector *connector)
 }
 
 static enum drm_mode_status cdv_intel_lvds_mode_valid(struct drm_connector *connector,
-			      struct drm_display_mode *mode)
+			      const struct drm_display_mode *mode)
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_psb_private *dev_priv = to_drm_psb_private(dev);
@@ -309,6 +312,9 @@ static int cdv_intel_lvds_get_modes(struct drm_connector *connector)
 	if (mode_dev->panel_fixed_mode != NULL) {
 		struct drm_display_mode *mode =
 		    drm_mode_duplicate(dev, mode_dev->panel_fixed_mode);
+		if (!mode)
+			return 0;
+
 		drm_mode_probed_add(connector, mode);
 		return 1;
 	}
@@ -495,17 +501,15 @@ void cdv_intel_lvds_init(struct drm_device *dev,
 		return;
 	}
 
-	gma_encoder = kzalloc(sizeof(struct gma_encoder),
-				    GFP_KERNEL);
+	gma_encoder = kzalloc_obj(struct gma_encoder);
 	if (!gma_encoder)
 		return;
 
-	gma_connector = kzalloc(sizeof(struct gma_connector),
-				      GFP_KERNEL);
+	gma_connector = kzalloc_obj(struct gma_connector);
 	if (!gma_connector)
 		goto err_free_encoder;
 
-	lvds_priv = kzalloc(sizeof(struct cdv_intel_lvds_priv), GFP_KERNEL);
+	lvds_priv = kzalloc_obj(struct cdv_intel_lvds_priv);
 	if (!lvds_priv)
 		goto err_free_connector;
 
@@ -563,7 +567,7 @@ void cdv_intel_lvds_init(struct drm_device *dev,
 			dev->dev, "I2C bus registration failed.\n");
 		goto err_encoder_cleanup;
 	}
-	gma_encoder->i2c_bus->slave_addr = 0x2C;
+	gma_encoder->i2c_bus->target_addr = 0x2C;
 	dev_priv->lvds_i2c_bus = gma_encoder->i2c_bus;
 
 	/*

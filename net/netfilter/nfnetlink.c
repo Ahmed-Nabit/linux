@@ -29,6 +29,7 @@
 
 #include <net/netlink.h>
 #include <net/netns/generic.h>
+#include <linux/netfilter.h>
 #include <linux/netfilter/nfnetlink.h>
 
 MODULE_LICENSE("GPL");
@@ -294,6 +295,7 @@ replay:
 			nfnl_lock(subsys_id);
 			if (nfnl_dereference_protected(subsys_id) != ss ||
 			    nfnetlink_find_client(type, ss) != nc) {
+				nfnl_unlock(subsys_id);
 				err = -EAGAIN;
 				break;
 			}
@@ -323,7 +325,7 @@ static int nfnl_err_add(struct list_head *list, struct nlmsghdr *nlh, int err,
 {
 	struct nfnl_err *nfnl_err;
 
-	nfnl_err = kmalloc(sizeof(struct nfnl_err), GFP_KERNEL);
+	nfnl_err = kmalloc_obj(struct nfnl_err);
 	if (nfnl_err == NULL)
 		return -ENOMEM;
 
@@ -374,6 +376,7 @@ static void nfnetlink_rcv_batch(struct sk_buff *skb, struct nlmsghdr *nlh,
 	const struct nfnetlink_subsystem *ss;
 	const struct nfnl_callback *nc;
 	struct netlink_ext_ack extack;
+	struct nlmsghdr *onlh = nlh;
 	LIST_HEAD(err_list);
 	u32 status;
 	int err;
@@ -384,6 +387,7 @@ replay:
 	status = 0;
 replay_abort:
 	skb = netlink_skb_clone(oskb, GFP_KERNEL);
+	nlh = onlh;
 	if (!skb)
 		return netlink_ack(oskb, nlh, -ENOMEM, NULL);
 
@@ -400,30 +404,35 @@ replay_abort:
 		{
 			nfnl_unlock(subsys_id);
 			netlink_ack(oskb, nlh, -EOPNOTSUPP, NULL);
-			return kfree_skb(skb);
+			return consume_skb(skb);
 		}
 	}
 
 	if (!ss->valid_genid || !ss->commit || !ss->abort) {
 		nfnl_unlock(subsys_id);
 		netlink_ack(oskb, nlh, -EOPNOTSUPP, NULL);
-		return kfree_skb(skb);
+		return consume_skb(skb);
 	}
 
 	if (!try_module_get(ss->owner)) {
 		nfnl_unlock(subsys_id);
 		netlink_ack(oskb, nlh, -EOPNOTSUPP, NULL);
-		return kfree_skb(skb);
+		return consume_skb(skb);
 	}
 
 	if (!ss->valid_genid(net, genid)) {
 		module_put(ss->owner);
 		nfnl_unlock(subsys_id);
 		netlink_ack(oskb, nlh, -ERESTART, NULL);
-		return kfree_skb(skb);
+		return consume_skb(skb);
 	}
 
 	nfnl_unlock(subsys_id);
+
+	if (nlh->nlmsg_flags & NLM_F_ACK) {
+		memset(&extack, 0, sizeof(extack));
+		nfnl_err_add(&err_list, nlh, 0, &extack);
+	}
 
 	while (skb->len >= nlmsg_total_size(0)) {
 		int msglen, type;
@@ -510,7 +519,7 @@ replay_abort:
 			err = nla_parse_deprecated(cda,
 						   ss->cb[cb_id].attr_count,
 						   attr, attrlen,
-						   ss->cb[cb_id].policy, NULL);
+						   ss->cb[cb_id].policy, &extack);
 			if (err < 0)
 				goto ack;
 
@@ -531,7 +540,8 @@ ack:
 			 * processed, this avoids that the same error is
 			 * reported several times when replaying the batch.
 			 */
-			if (nfnl_err_add(&err_list, nlh, err, &extack) < 0) {
+			if (err == -ENOMEM ||
+			    nfnl_err_add(&err_list, nlh, err, &extack) < 0) {
 				/* We failed to enqueue an error, reset the
 				 * list of errors and send OOM to userspace
 				 * pointing to the batch header.
@@ -559,7 +569,7 @@ done:
 	if (status & NFNL_BATCH_REPLAY) {
 		ss->abort(net, oskb, NFNL_ABORT_AUTOLOAD);
 		nfnl_err_reset(&err_list);
-		kfree_skb(skb);
+		consume_skb(skb);
 		module_put(ss->owner);
 		goto replay;
 	} else if (status == NFNL_BATCH_DONE) {
@@ -570,6 +580,9 @@ done:
 		} else if (err) {
 			ss->abort(net, oskb, NFNL_ABORT_NONE);
 			netlink_ack(oskb, nlmsg_hdr(oskb), err, NULL);
+		} else if (nlh->nlmsg_flags & NLM_F_ACK) {
+			memset(&extack, 0, sizeof(extack));
+			nfnl_err_add(&err_list, nlh, 0, &extack);
 		}
 	} else {
 		enum nfnl_abort_action abort_action;
@@ -582,17 +595,15 @@ done:
 		err = ss->abort(net, oskb, abort_action);
 		if (err == -EAGAIN) {
 			nfnl_err_reset(&err_list);
-			kfree_skb(skb);
+			consume_skb(skb);
 			module_put(ss->owner);
 			status |= NFNL_BATCH_FAILURE;
 			goto replay_abort;
 		}
 	}
-	if (ss->cleanup)
-		ss->cleanup(net);
 
 	nfnl_err_deliver(&err_list, oskb);
-	kfree_skb(skb);
+	consume_skb(skb);
 	module_put(ss->owner);
 }
 
@@ -684,12 +695,12 @@ static void nfnetlink_bind_event(struct net *net, unsigned int group)
 	group_bit = (1 << group);
 
 	spin_lock(&nfnl_grp_active_lock);
-	v = READ_ONCE(net->ct.ctnetlink_has_listener);
+	v = READ_ONCE(nf_ctnetlink_has_listener);
 	if ((v & group_bit) == 0) {
 		v |= group_bit;
 
 		/* read concurrently without nfnl_grp_active_lock held. */
-		WRITE_ONCE(net->ct.ctnetlink_has_listener, v);
+		WRITE_ONCE(nf_ctnetlink_has_listener, v);
 	}
 
 	spin_unlock(&nfnl_grp_active_lock);
@@ -743,12 +754,12 @@ static void nfnetlink_unbind(struct net *net, int group)
 
 	spin_lock(&nfnl_grp_active_lock);
 	if (!nfnetlink_has_listeners(net, group)) {
-		u8 v = READ_ONCE(net->ct.ctnetlink_has_listener);
+		u8 v = READ_ONCE(nf_ctnetlink_has_listener);
 
 		v &= ~group_bit;
 
 		/* read concurrently without nfnl_grp_active_lock held. */
-		WRITE_ONCE(net->ct.ctnetlink_has_listener, v);
+		WRITE_ONCE(nf_ctnetlink_has_listener, v);
 	}
 	spin_unlock(&nfnl_grp_active_lock);
 #endif

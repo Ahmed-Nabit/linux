@@ -15,7 +15,6 @@ maintainers:
 properties:
   compatible:
     enum:
-      - samsung,s3c2443-fimd
       - samsung,s3c6400-fimd
       - samsung,s5pv210-fimd
       - samsung,exynos3250-fimd
@@ -27,7 +26,6 @@ properties:
     const: 1
 
   clocks:
-    minItems: 2
     maxItems: 2
 
   clock-names:
@@ -40,6 +38,7 @@ properties:
 
   i80-if-timings:
     type: object
+    additionalProperties: false
     description: |
       Timing configuration for lcd i80 interface support.
       The parameters are defined as::

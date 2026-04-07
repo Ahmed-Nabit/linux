@@ -71,6 +71,20 @@ the ‘TRC’ prefix.
 
 ----
 
+:File:            ``ts_source`` (ro)
+:Trace Registers: None.
+:Notes:
+    When FEAT_TRF is implemented, value of TRFCR_ELx.TS used for trace session. Otherwise -1
+    indicates an unknown time source. Check trcidr0.tssize to see if a global timestamp is
+    available.
+
+:Example:
+    ``$> cat ts_source``
+
+    ``$> 1``
+
+----
+
 :File:            ``addr_idx`` (rw)
 :Trace Registers: None.
 :Notes:
@@ -661,7 +675,7 @@ Bit assignments shown below:-
     reconstructed using only conditional branches.
 
     There is currently no support in Perf for supplying modified binaries to the decoder, so this
-    feature is only inteded to be used for debugging purposes or with a 3rd party tool.
+    feature is only intended to be used for debugging purposes or with a 3rd party tool.
 
     Choosing this option will result in a significant increase in the amount of trace generated -
     possible danger of overflows, or fewer instructions covered. Note, that this option also

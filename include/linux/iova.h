@@ -65,6 +65,11 @@ static inline size_t iova_align(struct iova_domain *iovad, size_t size)
 	return ALIGN(size, iovad->granule);
 }
 
+static inline size_t iova_align_down(struct iova_domain *iovad, size_t size)
+{
+	return ALIGN_DOWN(size, iovad->granule);
+}
+
 static inline dma_addr_t iova_dma_addr(struct iova_domain *iovad, struct iova *iova)
 {
 	return (dma_addr_t)iova->pfn_lo << iova_shift(iovad);
@@ -75,7 +80,7 @@ static inline unsigned long iova_pfn(struct iova_domain *iovad, dma_addr_t iova)
 	return iova >> iova_shift(iovad);
 }
 
-#if IS_ENABLED(CONFIG_IOMMU_IOVA)
+#if IS_REACHABLE(CONFIG_IOMMU_IOVA)
 int iova_cache_get(void);
 void iova_cache_put(void);
 

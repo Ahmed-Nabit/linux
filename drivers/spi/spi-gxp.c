@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0=or-later
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Copyright (C) 2022 Hewlett-Packard Development Company, L.P. */
 
 #include <linux/iopoll.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi-mem.h>
@@ -195,13 +194,13 @@ static ssize_t gxp_spi_write(struct gxp_spi_chip *chip, const struct spi_mem_op 
 		return ret;
 	}
 
-	return write_len;
+	return 0;
 }
 
 static int do_gxp_exec_mem_op(struct spi_mem *mem, const struct spi_mem_op *op)
 {
-	struct gxp_spi *spifi = spi_controller_get_devdata(mem->spi->master);
-	struct gxp_spi_chip *chip = &spifi->chips[mem->spi->chip_select];
+	struct gxp_spi *spifi = spi_controller_get_devdata(mem->spi->controller);
+	struct gxp_spi_chip *chip = &spifi->chips[spi_get_chipselect(mem->spi, 0)];
 	int ret;
 
 	if (op->data.dir == SPI_MEM_DATA_IN) {
@@ -236,8 +235,8 @@ static const struct spi_controller_mem_ops gxp_spi_mem_ops = {
 
 static int gxp_spi_setup(struct spi_device *spi)
 {
-	struct gxp_spi *spifi = spi_controller_get_devdata(spi->master);
-	unsigned int cs = spi->chip_select;
+	struct gxp_spi *spifi = spi_controller_get_devdata(spi->controller);
+	unsigned int cs = spi_get_chipselect(spi, 0);
 	struct gxp_spi_chip *chip = &spifi->chips[cs];
 
 	chip->spifi = spifi;
@@ -254,12 +253,11 @@ static int gxp_spifi_probe(struct platform_device *pdev)
 	const struct gxp_spi_data *data;
 	struct spi_controller *ctlr;
 	struct gxp_spi *spifi;
-	struct resource *res;
 	int ret;
 
 	data = of_device_get_match_data(&pdev->dev);
 
-	ctlr = devm_spi_alloc_master(dev, sizeof(*spifi));
+	ctlr = devm_spi_alloc_host(dev, sizeof(*spifi));
 	if (!ctlr)
 		return -ENOMEM;
 
@@ -269,18 +267,15 @@ static int gxp_spifi_probe(struct platform_device *pdev)
 	spifi->data = data;
 	spifi->dev = dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	spifi->reg_base = devm_ioremap_resource(&pdev->dev, res);
+	spifi->reg_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(spifi->reg_base))
 		return PTR_ERR(spifi->reg_base);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	spifi->dat_base = devm_ioremap_resource(&pdev->dev, res);
+	spifi->dat_base = devm_platform_ioremap_resource(pdev, 1);
 	if (IS_ERR(spifi->dat_base))
 		return PTR_ERR(spifi->dat_base);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
-	spifi->dir_base = devm_ioremap_resource(&pdev->dev, res);
+	spifi->dir_base = devm_platform_ioremap_resource(pdev, 2);
 	if (IS_ERR(spifi->dir_base))
 		return PTR_ERR(spifi->dir_base);
 
@@ -289,7 +284,6 @@ static int gxp_spifi_probe(struct platform_device *pdev)
 	ctlr->mem_ops = &gxp_spi_mem_ops;
 	ctlr->setup = gxp_spi_setup;
 	ctlr->num_chipselect = data->max_cs;
-	ctlr->dev.of_node = dev->of_node;
 
 	ret = devm_spi_register_controller(dev, ctlr);
 	if (ret) {

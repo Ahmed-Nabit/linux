@@ -10,7 +10,6 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_gem_atomic_helper.h>
-#include <drm/drm_plane_helper.h>
 
 #include "sun4i_backend.h"
 #include "sun4i_frontend.h"
@@ -30,7 +29,7 @@ static void sun4i_backend_layer_reset(struct drm_plane *plane)
 		plane->state = NULL;
 	}
 
-	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	state = kzalloc_obj(*state);
 	if (state)
 		__drm_atomic_helper_plane_reset(plane, &state->state);
 }
@@ -41,7 +40,7 @@ sun4i_backend_layer_duplicate_state(struct drm_plane *plane)
 	struct sun4i_layer_state *orig = state_to_sun4i_layer_state(plane->state);
 	struct sun4i_layer_state *copy;
 
-	copy = kzalloc(sizeof(*copy), GFP_KERNEL);
+	copy = kzalloc_obj(*copy);
 	if (!copy)
 		return NULL;
 

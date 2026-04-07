@@ -13,9 +13,9 @@
 #include <linux/init.h>
 #include <linux/rv.h>
 
-static void rv_panic_reaction(char *msg)
+__printf(1, 0) static void rv_panic_reaction(const char *msg, va_list args)
 {
-	panic(msg);
+	vpanic(msg, args);
 }
 
 static struct rv_reactor rv_panic = {
@@ -24,13 +24,13 @@ static struct rv_reactor rv_panic = {
 	.react = rv_panic_reaction
 };
 
-static int register_react_panic(void)
+static int __init register_react_panic(void)
 {
 	rv_register_reactor(&rv_panic);
 	return 0;
 }
 
-static void unregister_react_panic(void)
+static void __exit unregister_react_panic(void)
 {
 	rv_unregister_reactor(&rv_panic);
 }
@@ -38,6 +38,5 @@ static void unregister_react_panic(void)
 module_init(register_react_panic);
 module_exit(unregister_react_panic);
 
-MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Bristot de Oliveira");
 MODULE_DESCRIPTION("panic rv reactor: panic if an exception is found.");

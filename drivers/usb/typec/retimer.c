@@ -17,24 +17,12 @@
 #include "class.h"
 #include "retimer.h"
 
-static bool dev_name_ends_with(struct device *dev, const char *suffix)
-{
-	const char *name = dev_name(dev);
-	const int name_len = strlen(name);
-	const int suffix_len = strlen(suffix);
-
-	if (suffix_len > name_len)
-		return false;
-
-	return strcmp(name + (name_len - suffix_len), suffix) == 0;
-}
-
 static int retimer_fwnode_match(struct device *dev, const void *fwnode)
 {
-	return dev_fwnode(dev) == fwnode && dev_name_ends_with(dev, "-retimer");
+	return is_typec_retimer(dev) && device_match_fwnode(dev, fwnode);
 }
 
-static void *typec_retimer_match(struct fwnode_handle *fwnode, const char *id, void *data)
+static void *typec_retimer_match(const struct fwnode_handle *fwnode, const char *id, void *data)
 {
 	struct device *dev;
 
@@ -97,7 +85,7 @@ static void typec_retimer_release(struct device *dev)
 	kfree(to_typec_retimer(dev));
 }
 
-static const struct device_type typec_retimer_dev_type = {
+const struct device_type typec_retimer_dev_type = {
 	.name = "typec_retimer",
 	.release = typec_retimer_release,
 };
@@ -122,7 +110,7 @@ typec_retimer_register(struct device *parent, const struct typec_retimer_desc *d
 	if (!desc || !desc->set)
 		return ERR_PTR(-EINVAL);
 
-	retimer = kzalloc(sizeof(*retimer), GFP_KERNEL);
+	retimer = kzalloc_obj(*retimer);
 	if (!retimer)
 		return ERR_PTR(-ENOMEM);
 
@@ -167,7 +155,6 @@ void *typec_retimer_get_drvdata(struct typec_retimer *retimer)
 }
 EXPORT_SYMBOL_GPL(typec_retimer_get_drvdata);
 
-struct class retimer_class = {
+const struct class retimer_class = {
 	.name = "retimer",
-	.owner = THIS_MODULE,
 };

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Microchip LAN937X switch register definitions
- * Copyright (C) 2019-2021 Microchip Technology Inc.
+ * Copyright (C) 2019-2024 Microchip Technology Inc.
  */
 #ifndef __LAN937X_REG_H
 #define __LAN937X_REG_H
@@ -37,6 +37,14 @@
 #define SW_CLK125_ENB			BIT(1)
 #define SW_CLK25_ENB			BIT(0)
 
+#define REG_SW_CFG_STRAP_VAL		0x0200
+#define SW_CASCADE_ID_CFG		BIT(15)
+#define SW_VPHY_ADD_CFG			BIT(0)
+
+/* 2 - PHY Control */
+#define REG_SW_CFG_STRAP_OVR		0x0214
+#define SW_VPHY_DISABLE			BIT(31)
+
 /* 3 - Operation Control */
 #define REG_SW_OPERATION		0x0300
 
@@ -48,8 +56,7 @@
 
 #define SW_VLAN_ENABLE			BIT(7)
 #define SW_DROP_INVALID_VID		BIT(6)
-#define SW_AGE_CNT_M			0x7
-#define SW_AGE_CNT_S			3
+#define SW_AGE_CNT_M			GENMASK(5, 3)
 #define SW_RESV_MCAST_ENABLE		BIT(2)
 
 #define REG_SW_LUE_CTRL_1		0x0311
@@ -61,6 +68,16 @@
 #define SW_AGING_ENABLE			BIT(2)
 #define SW_FAST_AGING			BIT(1)
 #define SW_LINK_AUTO_AGING		BIT(0)
+
+#define REG_SW_LUE_CTRL_2		0x0312
+
+#define SW_AGE_CNT_IN_MICROSEC		BIT(7)
+
+#define REG_SW_AGE_PERIOD__1		0x0313
+#define SW_AGE_PERIOD_7_0_M		GENMASK(7, 0)
+
+#define REG_SW_AGE_PERIOD__2		0x0320
+#define SW_AGE_PERIOD_19_8_M		GENMASK(19, 8)
 
 #define REG_SW_MAC_CTRL_0		0x0330
 #define SW_NEW_BACKOFF			BIT(7)
@@ -118,6 +135,18 @@
 /* Port Registers */
 
 /* 0 - Operation */
+#define REG_PORT_INT_STATUS		0x001B
+#define REG_PORT_INT_MASK		0x001F
+
+#define PORT_TAS_INT			BIT(5)
+#define PORT_QCI_INT			BIT(4)
+#define PORT_SGMII_INT			BIT(3)
+#define PORT_PTP_INT			BIT(2)
+#define PORT_PHY_INT			BIT(1)
+#define PORT_ACL_INT			BIT(0)
+
+#define PORT_SRC_PHY_INT		1
+
 #define REG_PORT_CTRL_0			0x0020
 
 #define PORT_MAC_LOOPBACK		BIT(7)
@@ -129,6 +158,7 @@
 
 /* 1 - Phy */
 #define REG_PORT_T1_PHY_CTRL_BASE	0x0100
+#define REG_PORT_TX_PHY_CTRL_BASE	0x0280
 
 /* 3 - xMII */
 #define PORT_SGMII_SEL			BIT(7)
@@ -166,6 +196,9 @@
 #define PORT_ACL_PRIO_ENABLE		BIT(0)
 
 #define P_PRIO_CTRL			REG_PORT_MRI_PRIO_CTRL
+
+/* 9 - Shaping */
+#define REG_PORT_MTI_CREDIT_INCREMENT	0x091C
 
 /* The port number as per the datasheet */
 #define RGMII_2_PORT_NUM		5

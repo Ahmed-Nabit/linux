@@ -24,6 +24,7 @@
  */
 
 #include "dm_services.h"
+#include "core_types.h"
 
 #include "ObjectID.h"
 #include "atomfirmware.h"
@@ -31,7 +32,6 @@
 #include "dc_bios_types.h"
 #include "include/grph_object_ctrl_defs.h"
 #include "include/bios_parser_interface.h"
-#include "include/i2caux_interface.h"
 #include "include/logger_interface.h"
 
 #include "command_table2.h"
@@ -44,37 +44,11 @@
 
 #include "bios_parser_common.h"
 
-/* Temporarily add in defines until ObjectID.h patch is updated in a few days */
-#ifndef GENERIC_OBJECT_ID_BRACKET_LAYOUT
-#define GENERIC_OBJECT_ID_BRACKET_LAYOUT          0x05
-#endif /* GENERIC_OBJECT_ID_BRACKET_LAYOUT */
-
-#ifndef GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID1
-#define GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID1	\
-	(GRAPH_OBJECT_TYPE_GENERIC << OBJECT_TYPE_SHIFT |\
-	GRAPH_OBJECT_ENUM_ID1 << ENUM_ID_SHIFT |\
-	GENERIC_OBJECT_ID_BRACKET_LAYOUT << OBJECT_ID_SHIFT)
-#endif /* GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID1 */
-
-#ifndef GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID2
-#define GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID2	\
-	(GRAPH_OBJECT_TYPE_GENERIC << OBJECT_TYPE_SHIFT |\
-	GRAPH_OBJECT_ENUM_ID2 << ENUM_ID_SHIFT |\
-	GENERIC_OBJECT_ID_BRACKET_LAYOUT << OBJECT_ID_SHIFT)
-#endif /* GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID2 */
-
 #define DC_LOGGER \
 	bp->base.ctx->logger
 
 #define LAST_RECORD_TYPE 0xff
 #define SMU9_SYSPLL0_ID  0
-
-struct i2c_id_config_access {
-	uint8_t bfI2C_LineMux:4;
-	uint8_t bfHW_EngineID:3;
-	uint8_t bfHW_Capable:1;
-	uint8_t ucAccess;
-};
 
 static enum bp_result get_gpio_i2c_info(struct bios_parser *bp,
 	struct atom_i2c_record *record,
@@ -98,6 +72,10 @@ static enum bp_result get_firmware_info_v3_2(
 	struct dc_firmware_info *info);
 
 static enum bp_result get_firmware_info_v3_4(
+	struct bios_parser *bp,
+	struct dc_firmware_info *info);
+
+static enum bp_result get_firmware_info_v3_5(
 	struct bios_parser *bp,
 	struct dc_firmware_info *info);
 
@@ -366,9 +344,8 @@ static struct atom_display_object_path_v2 *get_bios_object(
 }
 
 /* from graphics_object_id, find display path which includes the object_id */
-static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(
-	struct bios_parser *bp,
-	struct graphics_object_id id)
+static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(struct bios_parser *bp,
+									struct graphics_object_id id)
 {
 	unsigned int i;
 	struct graphics_object_id obj_id = {0};
@@ -382,7 +359,7 @@ static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(
 					&& id.enum_id == obj_id.enum_id)
 				return &bp->object_info_tbl.v1_5->display_path[i];
 		}
-        break;
+	break;
 
 	case OBJECT_TYPE_CONNECTOR:
 	case OBJECT_TYPE_GENERIC:
@@ -396,7 +373,7 @@ static struct atom_display_object_path_v3 *get_bios_object_from_path_v3(
 					&& id.enum_id == obj_id.enum_id)
 				return &bp->object_info_tbl.v1_5->display_path[i];
 		}
-        break;
+	break;
 
 	default:
 		return NULL;
@@ -432,16 +409,16 @@ static enum bp_result bios_parser_get_i2c_info(struct dc_bios *dcb,
 	}
 
 	switch (bp->object_info_tbl.revision.minor) {
-	    case 4:
-	    default:
-	        object = get_bios_object(bp, id);
+	case 4:
+	default:
+		object = get_bios_object(bp, id);
 
-	        if (!object)
-				return BP_RESULT_BADINPUT;
+		if (!object)
+			return BP_RESULT_BADINPUT;
 
-	        offset = object->disp_recordoffset + bp->object_info_tbl_offset;
-	        break;
-	    case 5:
+		offset = object->disp_recordoffset + bp->object_info_tbl_offset;
+		break;
+	case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, id);
 
 		if (!object_path_v3)
@@ -487,6 +464,7 @@ static enum bp_result get_gpio_i2c_info(
 	uint32_t count = 0;
 	unsigned int table_index = 0;
 	bool find_valid = false;
+	struct atom_gpio_pin_assignment *pin;
 
 	if (!info)
 		return BP_RESULT_BADINPUT;
@@ -514,20 +492,17 @@ static enum bp_result get_gpio_i2c_info(
 			- sizeof(struct atom_common_table_header))
 				/ sizeof(struct atom_gpio_pin_assignment);
 
+	pin = (struct atom_gpio_pin_assignment *) header->gpio_pin;
+
 	for (table_index = 0; table_index < count; table_index++) {
-		if (((record->i2c_id & I2C_HW_CAP) == (
-		header->gpio_pin[table_index].gpio_id &
-						I2C_HW_CAP)) &&
-		((record->i2c_id & I2C_HW_ENGINE_ID_MASK)  ==
-		(header->gpio_pin[table_index].gpio_id &
-					I2C_HW_ENGINE_ID_MASK)) &&
-		((record->i2c_id & I2C_HW_LANE_MUX) ==
-		(header->gpio_pin[table_index].gpio_id &
-						I2C_HW_LANE_MUX))) {
+		if (((record->i2c_id & I2C_HW_CAP) 				== (pin->gpio_id & I2C_HW_CAP)) &&
+		    ((record->i2c_id & I2C_HW_ENGINE_ID_MASK)	== (pin->gpio_id & I2C_HW_ENGINE_ID_MASK)) &&
+		    ((record->i2c_id & I2C_HW_LANE_MUX) 		== (pin->gpio_id & I2C_HW_LANE_MUX))) {
 			/* still valid */
 			find_valid = true;
 			break;
 		}
+		pin = (struct atom_gpio_pin_assignment *)((uint8_t *)pin + sizeof(struct atom_gpio_pin_assignment));
 	}
 
 	/* If we don't find the entry that we are looking for then
@@ -543,18 +518,14 @@ static enum bp_result get_gpio_i2c_info(
 	info->i2c_slave_address = record->i2c_slave_addr;
 
 	/* TODO: check how to get register offset for en, Y, etc. */
-	info->gpio_info.clk_a_register_index =
-			le16_to_cpu(
-			header->gpio_pin[table_index].data_a_reg_index);
-	info->gpio_info.clk_a_shift =
-			header->gpio_pin[table_index].gpio_bitshift;
+	info->gpio_info.clk_a_register_index = le16_to_cpu(pin->data_a_reg_index);
+	info->gpio_info.clk_a_shift = pin->gpio_bitshift;
 
 	return BP_RESULT_OK;
 }
 
-static struct atom_hpd_int_record *get_hpd_record_for_path_v3(
-	struct bios_parser *bp,
-	struct atom_display_object_path_v3 *object)
+static struct atom_hpd_int_record *get_hpd_record_for_path_v3(struct bios_parser *bp,
+							      struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -601,17 +572,16 @@ static enum bp_result bios_parser_get_hpd_info(
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	    case 4:
-	    default:
-	        object = get_bios_object(bp, id);
+	case 4:
+	default:
+		object = get_bios_object(bp, id);
 
 		if (!object)
 			return BP_RESULT_BADINPUT;
 
-	        record = get_hpd_record(bp, object);
-
-	        break;
-	    case 5:
+		record = get_hpd_record(bp, object);
+		break;
+	case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, id);
 
 		if (!object_path_v3)
@@ -805,20 +775,20 @@ static enum bp_result bios_parser_get_device_tag(
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	    case 4:
-	    default:
+	case 4:
+	default:
 	        /* getBiosObject will return MXM object */
-	        object = get_bios_object(bp, connector_object_id);
+		object = get_bios_object(bp, connector_object_id);
 
 		if (!object) {
 			BREAK_TO_DEBUGGER(); /* Invalid object id */
 			return BP_RESULT_BADINPUT;
 		}
 
-	        info->acpi_device = 0; /* BIOS no longer provides this */
-	        info->dev_id = device_type_from_device_id(object->device_tag);
-	        break;
-	    case 5:
+		info->acpi_device = 0; /* BIOS no longer provides this */
+		info->dev_id = device_type_from_device_id(object->device_tag);
+		break;
+	case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, connector_object_id);
 
 		if (!object_path_v3) {
@@ -868,6 +838,8 @@ static enum bp_result get_ss_info_v4_1(
 				disp_cntl_tbl->dvi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->dvi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DVI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_HDMI:
 		ss_info->spread_spectrum_percentage =
@@ -876,6 +848,8 @@ static enum bp_result get_ss_info_v4_1(
 				disp_cntl_tbl->hdmi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->hdmi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_HDMI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	/* TODO LVDS not support anymore? */
 	case AS_SIGNAL_TYPE_DISPLAY_PORT:
@@ -885,6 +859,8 @@ static enum bp_result get_ss_info_v4_1(
 				disp_cntl_tbl->dp_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->dp_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DISPLAY_PORT ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_GPU_PLL:
 		/* atom_firmware: DAL only get data from dce_info table.
@@ -898,13 +874,15 @@ static enum bp_result get_ss_info_v4_1(
 				      DATA_TABLES(smu_info));
 		if (!smu_info)
 			return BP_RESULT_BADBIOSTABLE;
-
+		DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", smu_info->gpuclk_ss_percentage);
 		ss_info->spread_spectrum_percentage =
 				smu_info->waflclk_ss_percentage;
 		ss_info->spread_spectrum_range =
 				smu_info->gpuclk_ss_rate_10hz * 10;
 		if (smu_info->waflclk_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_XGMI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	default:
 		result = BP_RESULT_UNSUPPORTED;
@@ -941,6 +919,7 @@ static enum bp_result get_ss_info_v4_2(
 	if (!smu_info)
 		return BP_RESULT_BADBIOSTABLE;
 
+	DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", smu_info->gpuclk_ss_percentage);
 	ss_info->type.STEP_AND_DELAY_INFO = false;
 	ss_info->spread_percentage_divider = 1000;
 	/* BIOS no longer uses target clock.  Always enable for now */
@@ -954,6 +933,8 @@ static enum bp_result get_ss_info_v4_2(
 				disp_cntl_tbl->dvi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->dvi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DVI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_HDMI:
 		ss_info->spread_spectrum_percentage =
@@ -962,6 +943,8 @@ static enum bp_result get_ss_info_v4_2(
 				disp_cntl_tbl->hdmi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->hdmi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_HDMI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	/* TODO LVDS not support anymore? */
 	case AS_SIGNAL_TYPE_DISPLAY_PORT:
@@ -971,6 +954,8 @@ static enum bp_result get_ss_info_v4_2(
 				smu_info->gpuclk_ss_rate_10hz * 10;
 		if (smu_info->gpuclk_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DISPLAY_PORT ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_GPU_PLL:
 		/* atom_firmware: DAL only get data from dce_info table.
@@ -1019,6 +1004,8 @@ static enum bp_result get_ss_info_v4_5(
 				disp_cntl_tbl->dvi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->dvi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DVI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_HDMI:
 		ss_info->spread_spectrum_percentage =
@@ -1027,14 +1014,25 @@ static enum bp_result get_ss_info_v4_5(
 				disp_cntl_tbl->hdmi_ss_rate_10hz * 10;
 		if (disp_cntl_tbl->hdmi_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
 			ss_info->type.CENTER_MODE = true;
+
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_HDMI ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_DISPLAY_PORT:
-		ss_info->spread_spectrum_percentage =
+		if (bp->base.integrated_info) {
+			DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", bp->base.integrated_info->gpuclk_ss_percentage);
+			ss_info->spread_spectrum_percentage =
+					bp->base.integrated_info->gpuclk_ss_percentage;
+			ss_info->type.CENTER_MODE =
+					bp->base.integrated_info->gpuclk_ss_type;
+		} else {
+			ss_info->spread_spectrum_percentage =
 				disp_cntl_tbl->dp_ss_percentage;
-		ss_info->spread_spectrum_range =
+			ss_info->spread_spectrum_range =
 				disp_cntl_tbl->dp_ss_rate_10hz * 10;
-		if (disp_cntl_tbl->dp_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
-			ss_info->type.CENTER_MODE = true;
+			if (disp_cntl_tbl->dp_ss_mode & ATOM_SS_CENTRE_SPREAD_MODE)
+				ss_info->type.CENTER_MODE = true;
+		}
+		DC_LOG_BIOS("AS_SIGNAL_TYPE_DISPLAY_PORT ss_percentage: %d\n", ss_info->spread_spectrum_percentage);
 		break;
 	case AS_SIGNAL_TYPE_GPU_PLL:
 		/* atom_smu_info_v4_0 does not have fields for SS for SMU Display PLL anymore.
@@ -1372,7 +1370,7 @@ static enum bp_result bios_parser_get_lttpr_interop(
 	default:
 		break;
 	}
-
+	DC_LOG_BIOS("DCE_INFO_CAPS_VBIOS_LTTPR_TRANSPARENT_ENABLE: %d tbl_revision.major = %d tbl_revision.minor = %d\n", *dce_caps, tbl_revision.major, tbl_revision.minor);
 	return result;
 }
 
@@ -1388,6 +1386,7 @@ static enum bp_result bios_parser_get_lttpr_caps(
 	if (!DATA_TABLES(dce_info))
 		return BP_RESULT_UNSUPPORTED;
 
+	*dce_caps  = 0;
 	header = GET_IMAGE(struct atom_common_table_header,
 						DATA_TABLES(dce_info));
 	get_atom_data_table_revision(header, &tbl_revision);
@@ -1421,7 +1420,11 @@ static enum bp_result bios_parser_get_lttpr_caps(
 	default:
 		break;
 	}
-
+	DC_LOG_BIOS("DCE_INFO_CAPS_LTTPR_SUPPORT_ENABLE: %d tbl_revision.major = %d tbl_revision.minor = %d\n", *dce_caps, tbl_revision.major, tbl_revision.minor);
+	if (dcb->ctx->dc->config.force_bios_enable_lttpr && *dce_caps == 0) {
+		*dce_caps = 1;
+		DC_LOG_BIOS("DCE_INFO_CAPS_VBIOS_LTTPR_TRANSPARENT_ENABLE: forced enabled");
+	}
 	return result;
 }
 
@@ -1477,10 +1480,10 @@ static enum bp_result get_embedded_panel_info_v2_1(
 	/* not provided by VBIOS */
 	info->lcd_timing.misc_info.HORIZONTAL_CUT_OFF = 0;
 
-	info->lcd_timing.misc_info.H_SYNC_POLARITY = ~(uint32_t) (lvds->lcd_timing.miscinfo
-			& ATOM_HSYNC_POLARITY);
-	info->lcd_timing.misc_info.V_SYNC_POLARITY = ~(uint32_t) (lvds->lcd_timing.miscinfo
-			& ATOM_VSYNC_POLARITY);
+	info->lcd_timing.misc_info.H_SYNC_POLARITY = !(lvds->lcd_timing.miscinfo &
+						       ATOM_HSYNC_POLARITY);
+	info->lcd_timing.misc_info.V_SYNC_POLARITY = !(lvds->lcd_timing.miscinfo &
+						       ATOM_VSYNC_POLARITY);
 
 	/* not provided by VBIOS */
 	info->lcd_timing.misc_info.VERTICAL_CUT_OFF = 0;
@@ -1587,16 +1590,14 @@ static bool bios_parser_is_device_id_supported(
 	uint32_t mask = get_support_mask_for_device_id(id);
 
 	switch (bp->object_info_tbl.revision.minor) {
-	    case 4:
-	    default:
-	        return (le16_to_cpu(bp->object_info_tbl.v1_4->supporteddevices) & mask) != 0;
-			break;
-	    case 5:
-			return (le16_to_cpu(bp->object_info_tbl.v1_5->supporteddevices) & mask) != 0;
-			break;
+	case 4:
+	default:
+		return (le16_to_cpu(bp->object_info_tbl.v1_4->supporteddevices) & mask) != 0;
+		break;
+	case 5:
+		return (le16_to_cpu(bp->object_info_tbl.v1_5->supporteddevices) & mask) != 0;
+		break;
 	}
-
-	return false;
 }
 
 static uint32_t bios_parser_get_ss_entry_number(
@@ -1699,14 +1700,15 @@ static enum bp_result bios_parser_enable_disp_power_gating(
 static enum bp_result bios_parser_enable_lvtma_control(
 	struct dc_bios *dcb,
 	uint8_t uc_pwr_on,
-	uint8_t panel_instance)
+	uint8_t pwrseq_instance,
+	uint8_t bypass_panel_control_wait)
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
 
 	if (!bp->cmd_tbl.enable_lvtma_control)
 		return BP_RESULT_FAILURE;
 
-	return bp->cmd_tbl.enable_lvtma_control(bp, uc_pwr_on, panel_instance);
+	return bp->cmd_tbl.enable_lvtma_control(bp, uc_pwr_on, pwrseq_instance, bypass_panel_control_wait);
 }
 
 static bool bios_parser_is_accelerated_mode(
@@ -1728,15 +1730,6 @@ static void bios_parser_set_scratch_critical_state(
 {
 	bios_set_scratch_critical_state(dcb, state);
 }
-
-struct atom_dig_transmitter_info_header_v5_3 {
-    struct atom_common_table_header table_header;
-    uint16_t dpphy_hdmi_settings_offset;
-    uint16_t dpphy_dvi_settings_offset;
-    uint16_t dpphy_dp_setting_table_offset;
-    uint16_t uniphy_xbar_settings_v2_table_offset;
-    uint16_t dpphy_internal_reg_overide_offset;
-};
 
 static enum bp_result bios_parser_get_firmware_info(
 	struct dc_bios *dcb,
@@ -1761,9 +1754,12 @@ static enum bp_result bios_parser_get_firmware_info(
 			case 2:
 			case 3:
 				result = get_firmware_info_v3_2(bp, info);
-                                break;
+				break;
 			case 4:
 				result = get_firmware_info_v3_4(bp, info);
+				break;
+			case 5:
+				result = get_firmware_info_v3_5(bp, info);
 				break;
 			default:
 				break;
@@ -1782,6 +1778,7 @@ static enum bp_result get_firmware_info_v3_1(
 	struct dc_firmware_info *info)
 {
 	struct atom_firmware_info_v3_1 *firmware_info;
+	struct atom_firmware_info_v3_2 *firmware_info32;
 	struct atom_display_controller_info_v4_1 *dce_info = NULL;
 
 	if (!info)
@@ -1789,11 +1786,13 @@ static enum bp_result get_firmware_info_v3_1(
 
 	firmware_info = GET_IMAGE(struct atom_firmware_info_v3_1,
 			DATA_TABLES(firmwareinfo));
+	firmware_info32 = GET_IMAGE(struct atom_firmware_info_v3_2,
+			DATA_TABLES(firmwareinfo));
 
 	dce_info = GET_IMAGE(struct atom_display_controller_info_v4_1,
 			DATA_TABLES(dce_info));
 
-	if (!firmware_info || !dce_info)
+	if (!firmware_info || !firmware_info32 || !dce_info)
 		return BP_RESULT_BADBIOSTABLE;
 
 	memset(info, 0, sizeof(*info));
@@ -1821,7 +1820,15 @@ static enum bp_result get_firmware_info_v3_1(
 				bp->cmd_tbl.get_smu_clock_info(bp, SMU9_SYSPLL0_ID) * 10;
 	}
 
-	info->oem_i2c_present = false;
+	/* These fields are marked as reserved in v3_1, but they appear to be populated
+	 * properly.
+	 */
+	if (firmware_info32 && firmware_info32->board_i2c_feature_id == 0x2) {
+		info->oem_i2c_present = true;
+		info->oem_i2c_obj_id = firmware_info32->board_i2c_feature_gpio_id;
+	} else {
+		info->oem_i2c_present = false;
+	}
 
 	return BP_RESULT_OK;
 }
@@ -1859,18 +1866,20 @@ static enum bp_result get_firmware_info_v3_2(
 		/* Vega12 */
 		smu_info_v3_2 = GET_IMAGE(struct atom_smu_info_v3_2,
 							DATA_TABLES(smu_info));
-
 		if (!smu_info_v3_2)
 			return BP_RESULT_BADBIOSTABLE;
+
+		DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", smu_info_v3_2->gpuclk_ss_percentage);
 
 		info->default_engine_clk = smu_info_v3_2->bootup_dcefclk_10khz * 10;
 	} else if (revision.minor == 3) {
 		/* Vega20 */
 		smu_info_v3_3 = GET_IMAGE(struct atom_smu_info_v3_3,
 							DATA_TABLES(smu_info));
-
 		if (!smu_info_v3_3)
 			return BP_RESULT_BADBIOSTABLE;
+
+		DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", smu_info_v3_3->gpuclk_ss_percentage);
 
 		info->default_engine_clk = smu_info_v3_3->bootup_dcefclk_10khz * 10;
 	}
@@ -2010,7 +2019,7 @@ static enum bp_result get_firmware_info_v3_4(
 
 			if (!smu_info_v3_5)
 				return BP_RESULT_BADBIOSTABLE;
-
+			DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", smu_info_v3_5->gpuclk_ss_percentage);
 			info->default_engine_clk = smu_info_v3_5->bootup_dcefclk_10khz * 10;
 			break;
 
@@ -2053,6 +2062,63 @@ static enum bp_result get_firmware_info_v3_4(
 	return BP_RESULT_OK;
 }
 
+static enum bp_result get_firmware_info_v3_5(
+	struct bios_parser *bp,
+	struct dc_firmware_info *info)
+{
+	struct atom_firmware_info_v3_5 *firmware_info;
+	struct atom_common_table_header *header;
+	struct atom_data_revision revision;
+	struct atom_display_controller_info_v4_5 *dce_info_v4_5 = NULL;
+
+	if (!info)
+		return BP_RESULT_BADINPUT;
+
+	firmware_info = GET_IMAGE(struct atom_firmware_info_v3_5,
+			DATA_TABLES(firmwareinfo));
+
+	if (!firmware_info)
+		return BP_RESULT_BADBIOSTABLE;
+
+	memset(info, 0, sizeof(*info));
+
+	if (firmware_info->board_i2c_feature_id == 0x2) {
+		info->oem_i2c_present = true;
+		info->oem_i2c_obj_id = firmware_info->board_i2c_feature_gpio_id;
+	} else {
+		info->oem_i2c_present = false;
+	}
+
+	header = GET_IMAGE(struct atom_common_table_header,
+					DATA_TABLES(dce_info));
+
+	get_atom_data_table_revision(header, &revision);
+
+	switch (revision.major) {
+	case 4:
+		switch (revision.minor) {
+		case 5:
+			dce_info_v4_5 = GET_IMAGE(struct atom_display_controller_info_v4_5,
+							DATA_TABLES(dce_info));
+
+			if (!dce_info_v4_5)
+				return BP_RESULT_BADBIOSTABLE;
+
+			 /* 100MHz expected */
+			info->pll_info.crystal_frequency = dce_info_v4_5->dce_refclk_10khz * 10;
+			break;
+		default:
+			break;
+		}
+		break;
+	default:
+		break;
+	}
+
+
+	return BP_RESULT_OK;
+}
+
 static enum bp_result bios_parser_get_encoder_cap_info(
 	struct dc_bios *dcb,
 	struct graphics_object_id object_id,
@@ -2065,7 +2131,7 @@ static enum bp_result bios_parser_get_encoder_cap_info(
 	if (!info)
 		return BP_RESULT_BADINPUT;
 
-#if defined(CONFIG_DRM_AMD_DC_DCN)
+#if defined(CONFIG_DRM_AMD_DC_FP)
 	/* encoder cap record not available in v1_5 */
 	if (bp->object_info_tbl.revision.minor == 5)
 		return BP_RESULT_NORECORD;
@@ -2179,9 +2245,8 @@ static struct atom_disp_connector_caps_record *get_disp_connector_caps_record(
 	return NULL;
 }
 
-static struct atom_connector_caps_record *get_connector_caps_record(
-	struct bios_parser *bp,
-	struct atom_display_object_path_v3 *object)
+static struct atom_connector_caps_record *get_connector_caps_record(struct bios_parser *bp,
+								    struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -2222,33 +2287,31 @@ static enum bp_result bios_parser_get_disp_connector_caps_info(
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
 	struct atom_display_object_path_v2 *object;
-
 	struct atom_display_object_path_v3 *object_path_v3;
 	struct atom_connector_caps_record *record_path_v3;
-
 	struct atom_disp_connector_caps_record *record = NULL;
 
 	if (!info)
 		return BP_RESULT_BADINPUT;
 
 	switch (bp->object_info_tbl.revision.minor) {
-	    case 4:
-	    default:
-		    object = get_bios_object(bp, object_id);
+	case 4:
+		default:
+			object = get_bios_object(bp, object_id);
 
-		    if (!object)
-			    return BP_RESULT_BADINPUT;
+			if (!object)
+				return BP_RESULT_BADINPUT;
 
-		    record = get_disp_connector_caps_record(bp, object);
-		    if (!record)
-			    return BP_RESULT_NORECORD;
+			record = get_disp_connector_caps_record(bp, object);
+			if (!record)
+				return BP_RESULT_NORECORD;
 
-		    info->INTERNAL_DISPLAY =
-			    (record->connectcaps & ATOM_CONNECTOR_CAP_INTERNAL_DISPLAY) ? 1 : 0;
-		    info->INTERNAL_DISPLAY_BL =
-			    (record->connectcaps & ATOM_CONNECTOR_CAP_INTERNAL_DISPLAY_BL) ? 1 : 0;
-		    break;
-	    case 5:
+			info->INTERNAL_DISPLAY =
+				(record->connectcaps & ATOM_CONNECTOR_CAP_INTERNAL_DISPLAY) ? 1 : 0;
+			info->INTERNAL_DISPLAY_BL =
+				(record->connectcaps & ATOM_CONNECTOR_CAP_INTERNAL_DISPLAY_BL) ? 1 : 0;
+			break;
+	case 5:
 		object_path_v3 = get_bios_object_from_path_v3(bp, object_id);
 
 		if (!object_path_v3)
@@ -2268,9 +2331,8 @@ static enum bp_result bios_parser_get_disp_connector_caps_info(
 	return BP_RESULT_OK;
 }
 
-static struct atom_connector_speed_record *get_connector_speed_cap_record(
-	struct bios_parser *bp,
-	struct atom_display_object_path_v3 *object)
+static struct atom_connector_speed_record *get_connector_speed_cap_record(struct bios_parser *bp,
+									  struct atom_display_object_path_v3 *object)
 {
 	struct atom_common_record_header *header;
 	uint32_t offset;
@@ -2392,6 +2454,44 @@ static enum bp_result get_vram_info_v25(
 	return result;
 }
 
+static enum bp_result get_vram_info_v30(
+	struct bios_parser *bp,
+	struct dc_vram_info *info)
+{
+	struct atom_vram_info_header_v3_0 *info_v30;
+	enum bp_result result = BP_RESULT_OK;
+
+	info_v30 = GET_IMAGE(struct atom_vram_info_header_v3_0,
+						DATA_TABLES(vram_info));
+
+	if (info_v30 == NULL)
+		return BP_RESULT_BADBIOSTABLE;
+
+	info->num_chans = info_v30->channel_num;
+	info->dram_channel_width_bytes = (1 << info_v30->channel_width) / 8;
+
+	return result;
+}
+
+static enum bp_result get_vram_info_from_umc_info_v40(
+		struct bios_parser *bp,
+		struct dc_vram_info *info)
+{
+	struct atom_umc_info_v4_0 *info_v40;
+	enum bp_result result = BP_RESULT_OK;
+
+	info_v40 = GET_IMAGE(struct atom_umc_info_v4_0,
+						DATA_TABLES(umc_info));
+
+	if (info_v40 == NULL)
+		return BP_RESULT_BADBIOSTABLE;
+
+	info->num_chans = info_v40->channel_num;
+	info->dram_channel_width_bytes = (1 << info_v40->channel_width) / 8;
+
+	return result;
+}
+
 /*
  * get_integrated_info_v11
  *
@@ -2418,6 +2518,8 @@ static enum bp_result get_integrated_info_v11(
 
 	if (info_v11 == NULL)
 		return BP_RESULT_BADBIOSTABLE;
+
+	DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", info_v11->gpuclk_ss_percentage);
 
 	info->gpu_cap_info =
 	le32_to_cpu(info_v11->gpucapinfo);
@@ -2634,6 +2736,8 @@ static enum bp_result get_integrated_info_v2_1(
 	if (info_v2_1 == NULL)
 		return BP_RESULT_BADBIOSTABLE;
 
+	DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", info_v2_1->gpuclk_ss_percentage);
+
 	info->gpu_cap_info =
 	le32_to_cpu(info_v2_1->gpucapinfo);
 	/*
@@ -2794,6 +2898,8 @@ static enum bp_result get_integrated_info_v2_2(
 	if (info_v2_2 == NULL)
 		return BP_RESULT_BADBIOSTABLE;
 
+	DC_LOG_BIOS("gpuclk_ss_percentage (unit of 0.001 percent): %d\n", info_v2_2->gpuclk_ss_percentage);
+
 	info->gpu_cap_info =
 	le32_to_cpu(info_v2_2->gpucapinfo);
 	/*
@@ -2810,6 +2916,8 @@ static enum bp_result get_integrated_info_v2_2(
 	info->ma_channel_number = info_v2_2->umachannelnumber;
 	info->dp_ss_control =
 		le16_to_cpu(info_v2_2->reserved1);
+	info->gpuclk_ss_percentage = info_v2_2->gpuclk_ss_percentage;
+	info->gpuclk_ss_type = info_v2_2->gpuclk_ss_type;
 
 	for (i = 0; i < NUMBER_OF_UCHAR_FOR_GUID; ++i) {
 		info->ext_disp_conn_info.gu_id[i] =
@@ -2906,9 +3014,11 @@ static enum bp_result construct_integrated_info(
 	struct atom_common_table_header *header;
 	struct atom_data_revision revision;
 
-	struct clock_voltage_caps temp = {0, 0};
-	uint32_t i;
-	uint32_t j;
+	int32_t i;
+	int32_t j;
+
+	if (!info)
+		return result;
 
 	if (info && DATA_TABLES(integratedsysteminfo)) {
 		header = GET_IMAGE(struct atom_common_table_header,
@@ -2933,6 +3043,7 @@ static enum bp_result construct_integrated_info(
 				result = get_integrated_info_v2_1(bp, info);
 				break;
 			case 2:
+			case 3:
 				result = get_integrated_info_v2_2(bp, info);
 				break;
 			default:
@@ -2941,6 +3052,27 @@ static enum bp_result construct_integrated_info(
 			break;
 		default:
 			return result;
+		}
+		if (result == BP_RESULT_OK) {
+
+			DC_LOG_BIOS("edp1:\n"
+						"\tedp_pwr_on_off_delay = %d\n"
+						"\tedp_pwr_on_vary_bl_to_blon = %d\n"
+						"\tedp_pwr_down_bloff_to_vary_bloff = %d\n"
+						"\tedp_bootup_bl_level = %d\n",
+						info->edp1_info.edp_pwr_on_off_delay,
+						info->edp1_info.edp_pwr_on_vary_bl_to_blon,
+						info->edp1_info.edp_pwr_down_bloff_to_vary_bloff,
+						info->edp1_info.edp_bootup_bl_level);
+			DC_LOG_BIOS("edp2:\n"
+						"\tedp_pwr_on_off_delayv = %d\n"
+						"\tedp_pwr_on_vary_bl_to_blon = %d\n"
+						"\tedp_pwr_down_bloff_to_vary_bloff = %d\n"
+						"\tedp_bootup_bl_level = %d\n",
+						info->edp2_info.edp_pwr_on_off_delay,
+						info->edp2_info.edp_pwr_on_vary_bl_to_blon,
+						info->edp2_info.edp_pwr_down_bloff_to_vary_bloff,
+						info->edp2_info.edp_bootup_bl_level);
 		}
 	}
 
@@ -2967,26 +3099,30 @@ static enum bp_result construct_integrated_info(
 						info->ext_disp_conn_info.path[i].ext_encoder_obj_id.id,
 						info->ext_disp_conn_info.path[i].caps
 						);
+			if ((info->ext_disp_conn_info.path[i].caps & AMD_EXT_DISPLAY_PATH_CAPS__EXT_CHIP_MASK) == AMD_EXT_DISPLAY_PATH_CAPS__DP_FIXED_VS_EN)
+				DC_LOG_BIOS("BIOS AMD_EXT_DISPLAY_PATH_CAPS__DP_FIXED_VS_EN on path %d\n", i);
+			else if (bp->base.ctx->dc->config.force_bios_fixed_vs) {
+				info->ext_disp_conn_info.path[i].caps &= ~AMD_EXT_DISPLAY_PATH_CAPS__EXT_CHIP_MASK;
+				info->ext_disp_conn_info.path[i].caps |= AMD_EXT_DISPLAY_PATH_CAPS__DP_FIXED_VS_EN;
+				DC_LOG_BIOS("driver forced AMD_EXT_DISPLAY_PATH_CAPS__DP_FIXED_VS_EN on path %d\n", i);
+			}
 		}
-
 		// Log the Checksum and Voltage Swing
 		DC_LOG_BIOS("Integrated info table CHECKSUM: %d\n"
 					"Integrated info table FIX_DP_VOLTAGE_SWING: %d\n",
 					info->ext_disp_conn_info.checksum,
 					info->ext_disp_conn_info.fixdpvoltageswing);
+		if (bp->base.ctx->dc->config.force_bios_fixed_vs && info->ext_disp_conn_info.fixdpvoltageswing == 0) {
+			info->ext_disp_conn_info.fixdpvoltageswing = bp->base.ctx->dc->config.force_bios_fixed_vs & 0xF;
+			DC_LOG_BIOS("driver forced fixdpvoltageswing = %d\n", info->ext_disp_conn_info.fixdpvoltageswing);
+		}
 	}
 	/* Sort voltage table from low to high*/
 	for (i = 1; i < NUMBER_OF_DISP_CLK_VOLTAGE; ++i) {
 		for (j = i; j > 0; --j) {
 			if (info->disp_clk_voltage[j].max_supported_clk <
-				info->disp_clk_voltage[j-1].max_supported_clk
-				) {
-				/* swap j and j - 1*/
-				temp = info->disp_clk_voltage[j-1];
-				info->disp_clk_voltage[j-1] =
-					info->disp_clk_voltage[j];
-				info->disp_clk_voltage[j] = temp;
-			}
+			    info->disp_clk_voltage[j-1].max_supported_clk)
+				swap(info->disp_clk_voltage[j-1], info->disp_clk_voltage[j]);
 		}
 	}
 
@@ -2998,11 +3134,33 @@ static enum bp_result bios_parser_get_vram_info(
 		struct dc_vram_info *info)
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
-	static enum bp_result result = BP_RESULT_BADBIOSTABLE;
+	enum bp_result result = BP_RESULT_BADBIOSTABLE;
 	struct atom_common_table_header *header;
 	struct atom_data_revision revision;
 
-	if (info && DATA_TABLES(vram_info)) {
+	// vram info moved to umc_info for DCN4x
+	if (info && DATA_TABLES(umc_info)) {
+		header = GET_IMAGE(struct atom_common_table_header,
+					DATA_TABLES(umc_info));
+
+		get_atom_data_table_revision(header, &revision);
+
+		switch (revision.major) {
+		case 4:
+			switch (revision.minor) {
+			case 0:
+				result = get_vram_info_from_umc_info_v40(bp, info);
+				break;
+			default:
+				break;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (result != BP_RESULT_OK && info && DATA_TABLES(vram_info)) {
 		header = GET_IMAGE(struct atom_common_table_header,
 					DATA_TABLES(vram_info));
 
@@ -3025,6 +3183,16 @@ static enum bp_result bios_parser_get_vram_info(
 			}
 			break;
 
+		case 3:
+			switch (revision.minor) {
+			case 0:
+				result = get_vram_info_v30(bp, info);
+				break;
+			default:
+				break;
+			}
+			break;
+
 		default:
 			return result;
 		}
@@ -3037,9 +3205,9 @@ static struct integrated_info *bios_parser_create_integrated_info(
 	struct dc_bios *dcb)
 {
 	struct bios_parser *bp = BP_FROM_DCB(dcb);
-	struct integrated_info *info = NULL;
+	struct integrated_info *info;
 
-	info = kzalloc(sizeof(struct integrated_info), GFP_KERNEL);
+	info = kzalloc_obj(struct integrated_info);
 
 	if (info == NULL) {
 		ASSERT_CRITICAL(0);
@@ -3286,27 +3454,28 @@ static enum bp_result get_bracket_layout_record(
 		DC_LOG_DETECTION_EDID_PARSER("Invalid slot_layout_info\n");
 		return BP_RESULT_BADINPUT;
 	}
+
 	tbl = &bp->object_info_tbl;
 	v1_4 = tbl->v1_4;
 	v1_5 = tbl->v1_5;
 
 	result = BP_RESULT_NORECORD;
 	switch (bp->object_info_tbl.revision.minor) {
-		case 4:
-		default:
-			for (i = 0; i < v1_4->number_of_path; ++i)	{
-				if (bracket_layout_id ==
-					v1_4->display_path[i].display_objid) {
-					result = update_slot_layout_info(dcb, i, slot_layout_info);
-					break;
-				}
+	case 4:
+	default:
+		for (i = 0; i < v1_4->number_of_path; ++i) {
+			if (bracket_layout_id == v1_4->display_path[i].display_objid) {
+				result = update_slot_layout_info(dcb, i, slot_layout_info);
+				break;
 			}
-		    break;
-		case 5:
-			for (i = 0; i < v1_5->number_of_path; ++i)
-				result = update_slot_layout_info_v2(dcb, i, slot_layout_info);
-			break;
+		}
+		break;
+	case 5:
+		for (i = 0; i < v1_5->number_of_path; ++i)
+			result = update_slot_layout_info_v2(dcb, i, slot_layout_info);
+		break;
 	}
+
 	return result;
 }
 
@@ -3315,17 +3484,15 @@ static enum bp_result bios_get_board_layout_info(
 	struct board_layout_info *board_layout_info)
 {
 	unsigned int i;
-
 	struct bios_parser *bp;
-
 	static enum bp_result record_result;
+	unsigned int max_slots;
 
 	const unsigned int slot_index_to_vbios_id[MAX_BOARD_SLOTS] = {
 		GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID1,
 		GENERICOBJECT_BRACKET_LAYOUT_ENUM_ID2,
 		0, 0
 	};
-
 
 	bp = BP_FROM_DCB(dcb);
 
@@ -3335,8 +3502,14 @@ static enum bp_result bios_get_board_layout_info(
 	}
 
 	board_layout_info->num_of_slots = 0;
+	max_slots = MAX_BOARD_SLOTS;
 
-	for (i = 0; i < MAX_BOARD_SLOTS; ++i) {
+	// Assume single slot on v1_5
+	if (bp->object_info_tbl.revision.minor == 5) {
+		max_slots = 1;
+	}
+
+	for (i = 0; i < max_slots; ++i) {
 		record_result = get_bracket_layout_record(dcb,
 			slot_index_to_vbios_id[i],
 			&board_layout_info->slots[i]);
@@ -3501,7 +3674,6 @@ static const struct dc_vbios_funcs vbios_funcs = {
 	.bios_parser_destroy = firmware_parser_destroy,
 
 	.get_board_layout_info = bios_get_board_layout_info,
-	/* TODO: use this fn in hw init?*/
 	.pack_data_tables = bios_parser_pack_data_tables,
 
 	.get_atom_dc_golden_table = bios_get_atom_dc_golden_table,
@@ -3611,7 +3783,7 @@ static bool bios_parser2_construct(
 	bp->base.integrated_info = bios_parser_create_integrated_info(&bp->base);
 	bp->base.fw_info_valid = bios_parser_get_firmware_info(&bp->base, &bp->base.fw_info) == BP_RESULT_OK;
 	bios_parser_get_vram_info(&bp->base, &bp->base.vram_info);
-
+	bios_parser_get_soc_bb_info(&bp->base, &bp->base.bb_info);
 	return true;
 }
 
@@ -3619,9 +3791,9 @@ struct dc_bios *firmware_parser_create(
 	struct bp_init_data *init,
 	enum dce_version dce_version)
 {
-	struct bios_parser *bp = NULL;
+	struct bios_parser *bp;
 
-	bp = kzalloc(sizeof(struct bios_parser), GFP_KERNEL);
+	bp = kzalloc_obj(struct bios_parser);
 	if (!bp)
 		return NULL;
 

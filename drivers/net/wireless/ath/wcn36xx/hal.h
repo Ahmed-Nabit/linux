@@ -2677,7 +2677,7 @@ struct ani_global_security_stats {
 	 * management information base (MIB) object is enabled */
 	u32 rx_wep_unencrypted_frm_cnt;
 
-	/* The number of received MSDU packets that that the 802.11 station
+	/* The number of received MSDU packets that the 802.11 station
 	 * discarded because of MIC failures */
 	u32 rx_mic_fail_cnt;
 
@@ -4483,80 +4483,6 @@ struct set_rssi_filter_resp {
 	/* status of the request */
 	u32 status;
 };
-
-/* Update scan params - sent from host to PNO to be used during PNO
- * scanningx */
-struct wcn36xx_hal_update_scan_params_req {
-
-	struct wcn36xx_hal_msg_header header;
-
-	/* Host setting for 11d */
-	u8 dot11d_enabled;
-
-	/* Lets PNO know that host has determined the regulatory domain */
-	u8 dot11d_resolved;
-
-	/* Channels on which PNO is allowed to scan */
-	u8 channel_count;
-	u8 channels[WCN36XX_HAL_PNO_MAX_NETW_CHANNELS];
-
-	/* Minimum channel time */
-	u16 active_min_ch_time;
-
-	/* Maximum channel time */
-	u16 active_max_ch_time;
-
-	/* Minimum channel time */
-	u16 passive_min_ch_time;
-
-	/* Maximum channel time */
-	u16 passive_max_ch_time;
-
-	/* Cb State */
-	enum phy_chan_bond_state state;
-} __packed;
-
-/* Update scan params - sent from host to PNO to be used during PNO
- * scanningx */
-struct wcn36xx_hal_update_scan_params_req_ex {
-
-	struct wcn36xx_hal_msg_header header;
-
-	/* Host setting for 11d */
-	u8 dot11d_enabled;
-
-	/* Lets PNO know that host has determined the regulatory domain */
-	u8 dot11d_resolved;
-
-	/* Channels on which PNO is allowed to scan */
-	u8 channel_count;
-	u8 channels[WCN36XX_HAL_PNO_MAX_NETW_CHANNELS_EX];
-
-	/* Minimum channel time */
-	u16 active_min_ch_time;
-
-	/* Maximum channel time */
-	u16 active_max_ch_time;
-
-	/* Minimum channel time */
-	u16 passive_min_ch_time;
-
-	/* Maximum channel time */
-	u16 passive_max_ch_time;
-
-	/* Cb State */
-	enum phy_chan_bond_state state;
-} __packed;
-
-/* Update scan params - sent from host to PNO to be used during PNO
- * scanningx */
-struct wcn36xx_hal_update_scan_params_resp {
-
-	struct wcn36xx_hal_msg_header header;
-
-	/* status of the request */
-	u32 status;
-} __packed;
 
 struct wcn36xx_hal_set_tx_per_tracking_req_msg {
 	struct wcn36xx_hal_msg_header header;

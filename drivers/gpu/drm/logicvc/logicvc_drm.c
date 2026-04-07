@@ -10,15 +10,17 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_device.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/types.h>
 
+#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_print.h>
 
 #include "logicvc_crtc.h"
@@ -29,9 +31,9 @@
 #include "logicvc_of.h"
 #include "logicvc_regs.h"
 
-DEFINE_DRM_GEM_CMA_FOPS(logicvc_drm_fops);
+DEFINE_DRM_GEM_DMA_FOPS(logicvc_drm_fops);
 
-static int logicvc_drm_gem_cma_dumb_create(struct drm_file *file_priv,
+static int logicvc_drm_gem_dma_dumb_create(struct drm_file *file_priv,
 					   struct drm_device *drm_dev,
 					   struct drm_mode_create_dumb *args)
 {
@@ -40,7 +42,7 @@ static int logicvc_drm_gem_cma_dumb_create(struct drm_file *file_priv,
 	/* Stride is always fixed to its configuration value. */
 	args->pitch = logicvc->config.row_stride * DIV_ROUND_UP(args->bpp, 8);
 
-	return drm_gem_cma_dumb_create_internal(file_priv, drm_dev, args);
+	return drm_gem_dma_dumb_create_internal(file_priv, drm_dev, args);
 }
 
 static struct drm_driver logicvc_drm_driver = {
@@ -50,11 +52,11 @@ static struct drm_driver logicvc_drm_driver = {
 	.fops				= &logicvc_drm_fops,
 	.name				= "logicvc-drm",
 	.desc				= "Xylon LogiCVC DRM driver",
-	.date				= "20200403",
 	.major				= 1,
 	.minor				= 0,
 
-	DRM_GEM_CMA_DRIVER_OPS_VMAP_WITH_DUMB_CREATE(logicvc_drm_gem_cma_dumb_create),
+	DRM_GEM_DMA_DRIVER_OPS_VMAP_WITH_DUMB_CREATE(logicvc_drm_gem_dma_dumb_create),
+	DRM_FBDEV_DMA_DRIVER_OPS,
 };
 
 static struct regmap_config logicvc_drm_regmap_config = {
@@ -90,7 +92,6 @@ static int logicvc_drm_config_parse(struct logicvc_drm *logicvc)
 	struct device *dev = drm_dev->dev;
 	struct device_node *of_node = dev->of_node;
 	struct logicvc_drm_config *config = &logicvc->config;
-	struct device_node *layers_node;
 	int ret;
 
 	logicvc_of_property_parse_bool(of_node, LOGICVC_OF_PROPERTY_DITHERING,
@@ -126,7 +127,8 @@ static int logicvc_drm_config_parse(struct logicvc_drm *logicvc)
 	if (ret)
 		return ret;
 
-	layers_node = of_get_child_by_name(of_node, "layers");
+	struct device_node *layers_node __free(device_node) =
+		of_get_child_by_name(of_node, "layers");
 	if (!layers_node) {
 		drm_err(drm_dev, "Missing non-optional layers node\n");
 		return -EINVAL;
@@ -438,7 +440,7 @@ static int logicvc_drm_probe(struct platform_device *pdev)
 		goto error_mode;
 	}
 
-	drm_fbdev_generic_setup(drm_dev, drm_dev->mode_config.preferred_depth);
+	drm_client_setup(drm_dev, NULL);
 
 	return 0;
 
@@ -455,7 +457,7 @@ error_early:
 	return ret;
 }
 
-static int logicvc_drm_remove(struct platform_device *pdev)
+static void logicvc_drm_remove(struct platform_device *pdev)
 {
 	struct logicvc_drm *logicvc = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -469,8 +471,14 @@ static int logicvc_drm_remove(struct platform_device *pdev)
 	logicvc_clocks_unprepare(logicvc);
 
 	of_reserved_mem_device_release(dev);
+}
 
-	return 0;
+static void logicvc_drm_shutdown(struct platform_device *pdev)
+{
+	struct logicvc_drm *logicvc = platform_get_drvdata(pdev);
+	struct drm_device *drm_dev = &logicvc->drm_dev;
+
+	drm_atomic_helper_shutdown(drm_dev);
 }
 
 static const struct of_device_id logicvc_drm_of_table[] = {
@@ -483,6 +491,7 @@ MODULE_DEVICE_TABLE(of, logicvc_drm_of_table);
 static struct platform_driver logicvc_drm_platform_driver = {
 	.probe		= logicvc_drm_probe,
 	.remove		= logicvc_drm_remove,
+	.shutdown	= logicvc_drm_shutdown,
 	.driver		= {
 		.name		= "logicvc-drm",
 		.of_match_table	= logicvc_drm_of_table,

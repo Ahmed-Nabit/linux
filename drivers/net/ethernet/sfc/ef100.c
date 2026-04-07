@@ -11,7 +11,6 @@
 
 #include "net_driver.h"
 #include <linux/module.h>
-#include <linux/aer.h>
 #include "efx_common.h"
 #include "efx_channels.h"
 #include "io.h"
@@ -440,8 +439,6 @@ static void ef100_pci_remove(struct pci_dev *pci_dev)
 
 	pci_dbg(pci_dev, "shutdown successful\n");
 
-	pci_disable_pcie_error_reporting(pci_dev);
-
 	pci_set_drvdata(pci_dev, NULL);
 	efx_fini_struct(efx);
 	kfree(probe_data);
@@ -456,7 +453,7 @@ static int ef100_pci_probe(struct pci_dev *pci_dev,
 	int rc;
 
 	/* Allocate probe data and struct efx_nic */
-	probe_data = kzalloc(sizeof(*probe_data), GFP_KERNEL);
+	probe_data = kzalloc_obj(*probe_data);
 	if (!probe_data)
 		return -ENOMEM;
 	probe_data->pci_dev = pci_dev;
